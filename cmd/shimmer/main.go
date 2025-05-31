@@ -3,7 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -16,49 +19,59 @@ import (
 
 // mount -o port=63289,mountport=63289 -t nfs localhost:/foo ~/.yolo
 
-func server() {
-	// if len(os.Args) < 2 {
-	// 	fmt.Printf("Usage: osview </path/to/folder> [port]\n")
-	// 	return
-	// } else if len(os.Args) == 3 {
-	// 	port = os.Args[2]
-	// }
+var (
+	lgr      *slog.Logger
+	logLevel = new(slog.LevelVar)
+)
 
-	// listener, err := net.Listen("tcp", ":"+port)
-	// if err != nil {
-	// 	fmt.Printf("Failed to listen: %v\n", err)
-	// 	return
-	// }
-	// fmt.Printf("Server running at %s\n", listener.Addr())
+func getLogger() *slog.Logger {
+	if lgr == nil {
+		logDir := filepath.Join(
+			os.Getenv("HOME"),
+			".shimmer",
+			"logs",
+		)
 
-	// fs := memphis.FromOS(os.Args[1])
-	// bfs := fs.AsBillyFS(0, 0)
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			fmt.Println("failed to create log directory: ", err)
+			os.Exit(1)
+		}
 
-	fmt.Println("Creating mount server...")
-	srvr := mount.NewMountServer("/tmp/shimmer.sock", os.Getpid())
+		logPath := filepath.Join(logDir, "info.log")
+		logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Fatalf("failed to open log file: %v", err)
+		}
+		lgr = slog.New(slog.NewJSONHandler(logFile, &slog.HandlerOptions{
+			Level: logLevel,
+		}))
+	}
+	return lgr
+}
 
-	fmt.Println("Registering handlers...")
+func server(lgr *slog.Logger) {
+	lgr.Debug("Creating mount server...")
+	srvr := mount.NewMountServer("/tmp/shimmer.sock", os.Getpid(), lgr)
+
+	lgr.Debug("Registering handlers...")
 	shutdown.Add(func() {
-		fmt.Println("shutdown hook triggered, stopping server...")
+		lgr.Info("shutdown hook triggered, stopping server...")
 		if err := srvr.Stop(); err != nil {
-			fmt.Printf("Error stopping server: %v\n", err)
+			lgr.Error("Error stopping server", slog.Any("err", err))
 		}
 	})
 
-	// handler := nfshelper.NewNullAuthHandler(bfs)
-	// cacheHelper := nfshelper.NewCachingHandler(handler, 1024)
-	fmt.Println("Kicking off server go routine...")
+	lgr.Info("Kicking off server go routine...")
 	go func() {
-		// fmt.Printf("%v", nfs.Serve(listener, cacheHelper))
 		if err := srvr.Start(); err != nil {
-			fmt.Printf("Error starting server: %v\n", err)
+			lgr.Error("Error stopping server", slog.Any("err", err))
 			return
 		}
 	}()
 
-	fmt.Println("Server started, waiting for shutdown...")
+	lgr.Info("Server started, waiting for shutdown...")
 	shutdown.Listen(syscall.SIGINT, syscall.SIGTERM)
-	fmt.Println("Shutdown signal received, stopping server...")
+	lgr.Info("Shutdown signal received, stopping server...")
 }
 
 func resolvePathToAbsolute(str string) (string, error) {
@@ -76,6 +89,11 @@ func resolvePathToAbsolute(str string) (string, error) {
 }
 
 func main() {
+
+	lgr := getLogger()
+
+	lgr.Debug("Setting up commands")
+
 	rootCmd := &cobra.Command{
 		Use:   "shimmer",
 		Short: "shimmer",
@@ -86,7 +104,7 @@ func main() {
 		Use:   "server",
 		Short: "Start the shimmer server",
 		Run: func(cmd *cobra.Command, args []string) {
-			server()
+			server(lgr)
 		},
 	})
 
@@ -123,9 +141,37 @@ func main() {
 				fmt.Printf("Error unmarshalling response: %v\n", err)
 				os.Exit(1)
 			}
-			fmt.Printf("Mounted %s at %s (port: %v)\n", result["mount_point"], mountPoint, result["port"])
+			lgr.Info("Mounted %s at %s (port: %v)\n", result["mount_point"], mountPoint, result["port"])
 		},
 	})
+
+	// Add root level flag for seting the log level
+	rootCmd.PersistentFlags().String("log-level", "info", "Set the log level (debug, info, warn, error)")
+
+	// Set the log level based on the flag
+	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		logLevelVal, err := cmd.Flags().GetString("log-level")
+		if err != nil {
+			fmt.Printf("Error getting log level: %v\n", err)
+			os.Exit(1)
+		}
+		var level slog.Level
+		switch logLevelVal {
+		case "debug":
+			level = slog.LevelDebug
+		case "info":
+			level = slog.LevelInfo
+		case "warn":
+			level = slog.LevelWarn
+		case "error":
+			level = slog.LevelError
+		default:
+			fmt.Printf("Invalid log level: %s\n", logLevel)
+			os.Exit(1)
+		}
+
+		logLevel.Set(level)
+	}
 
 	// Execute root command
 	if err := rootCmd.Execute(); err != nil {

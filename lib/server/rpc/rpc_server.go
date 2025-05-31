@@ -3,7 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"log/slog"
 	"net"
 	"os"
 
@@ -19,16 +19,18 @@ type Handler func(context context.Context, request []byte) ([]byte, error)
 type Server struct {
 	UnixSocket string
 	Handlers   map[string]Handler
+	Lgr        *slog.Logger
 
 	listener          net.Listener
 	authenticatedPIDs map[int]bool // Track authenticated PIDs
 }
 
 // NewServer creates a new Server instance with the specified Unix socket path.
-func NewServer(unixSocket string) *Server {
+func NewServer(unixSocket string, lgr *slog.Logger) *Server {
 	return &Server{
 		UnixSocket: unixSocket,
 		Handlers:   make(map[string]Handler),
+		Lgr:        lgr,
 	}
 }
 
@@ -61,8 +63,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			// If the handler panics, we can just close the connection.
-			fmt.Println("Handler panicked:", r)
+			s.Lgr.Info("Handler panicked", "error", r)
 			conn.Close()
 		}
 	}()
@@ -83,14 +84,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 
 	// Call the handler with the request payload.
-	fmt.Println("Handling request:", request.Command, "from PID:", request.PID, "for handler:", request.Command)
+	s.Lgr.Debug("Handling request", "command", request.Command, "pid", request.PID)
 	response, err := handler(context.Background(), request.Payload)
 	if err != nil {
 		// If the handler returns an error, we can just close the connection.
 		return
 	}
 
-	fmt.Println("Response from handler:", request.Command, "for PID:", request.PID)
+	s.Lgr.Debug("Response from handler", "command", request.Command, "pid", request.PID)
 	// Marshal the response and write it back to the connection.
 	encoder := json.NewEncoder(conn)
 	if err := encoder.Encode(response); err != nil {
@@ -98,7 +99,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		return
 	}
 
-	fmt.Println("Response sent for command:", request.Command, "from PID:", request.PID)
+	s.Lgr.Debug("Response sent for command", "command", request.Command, "pid", request.PID)
 }
 
 func (s *Server) Authenticate(pid int) (bool, error) {
@@ -120,13 +121,13 @@ func (s *Server) Authenticate(pid int) (bool, error) {
 
 // Start starts the server and listens for incoming requests on the Unix socket.
 func (s *Server) Start() error {
-	fmt.Println("Starting server on", s.UnixSocket)
+	s.Lgr.Info("Starting server", "socket", s.UnixSocket)
 	// First, see if the Unix socket already exists and remove it if it does.
 	if err := os.RemoveAll(s.UnixSocket); err != nil {
 		return err
 	}
 
-	fmt.Println("Creating Unix socket listener at", s.UnixSocket)
+	s.Lgr.Debug("Creating Unix socket listener", "socket", s.UnixSocket)
 	listener, err := net.Listen("unix", s.UnixSocket)
 	if err != nil {
 		return err
@@ -134,39 +135,29 @@ func (s *Server) Start() error {
 
 	defer func() {
 		if r := recover(); r != nil {
-			// If the server panics, we can just close the listener.
-			fmt.Println("Server panicked:", r)
+			s.Lgr.Info("Server panicked", "error", r)
 		}
 	}()
 
 	s.listener = listener
 	defer listener.Close()
-	fmt.Println("Server is listening for connections...")
+	s.Lgr.Info("Server is listening for connections")
 	for {
-		// if s.listener == nil {
-		// 	// If the listener is nil, we can exit the accept loop.
-		// 	// This can happen if the server is stopped while waiting for a new connection.
-		// 	fmt.Println("Server listener is nil, exiting accept loop")
-		// 	return
-		// }
-
-		fmt.Println("Waiting for new connection...")
+		s.Lgr.Debug("Waiting for new connection...")
 		conn, err := s.listener.Accept()
 		if err != nil {
 			// If the listener is closed, we can exit gracefully.
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				return nil
 			} else if ne, ok := err.(*net.OpError); ok && ne.Err.Error() == "use of closed network connection" {
-				fmt.Println("Listener closed, exiting accept loop")
+				s.Lgr.Info("Listener closed, exiting accept loop")
 				return nil
 			}
-			// Log the error and continue accepting new connections.
-			// In a real application, you might want to log this error.
-			fmt.Println("Error accepting connection:", err)
+			s.Lgr.Info("Error accepting connection", "error", err)
 			continue
 		}
 
-		fmt.Println("New connection accepted")
+		s.Lgr.Debug("New connection accepted")
 		go s.handleConnection(conn)
 	}
 }
