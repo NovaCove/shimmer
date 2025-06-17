@@ -12,6 +12,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/keybase/go-keychain v0.0.1 // indirect
 	github.com/lox/go-touchid v0.0.0-20170712105233-619cc8e578d0 // indirect
 	github.com/polydawn/go-timeless-api v0.0.0-20220821201550-b93919e12c56 // indirect
 	github.com/polydawn/refmt v0.89.0 // indirect

@@ -70,7 +70,7 @@ func (s *MountServer) StartMountHandler(ctxt context.Context, request []byte) ([
 		return nil, fmt.Errorf("failed to unmarshal request: %w", err)
 	}
 
-	s.lgr.Info("Mounting path: %s at mount point: %s\n", req.Path, req.MountPoint)
+	s.lgr.Info("Mounting path", slog.String("source", req.Path), slog.String("mountPath", req.MountPoint))
 	if req.Path == "" || req.MountPoint == "" {
 		return nil, fmt.Errorf("path and mount_point must be provided")
 	}
@@ -91,7 +91,7 @@ func (s *MountServer) StartMountHandler(ctxt context.Context, request []byte) ([
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on port %d: %w", port, err)
 	}
-	s.lgr.Info("Mount server running at %s\n", listener.Addr())
+	s.lgr.Info("Mount server running at", slog.Any("addr", listener.Addr()))
 	go func() {
 		if err := nfs.Serve(listener, cacheHelper); err != nil {
 			s.lgr.Error("Error serving NFS", slog.Any("err", err))
