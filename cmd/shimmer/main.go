@@ -145,6 +145,42 @@ func main() {
 		},
 	})
 
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "mount-single",
+		Short: "Mount a single file",
+		Run: func(cmd *cobra.Command, args []string) {
+			client := rpc.NewClient("/tmp/shimmer.sock", os.Getpid())
+			if len(args) < 2 {
+				fmt.Println("Usage: shimmer mount-single <path> <mount_point>")
+				os.Exit(1)
+			}
+			sourceFile, err := resolvePathToAbsolute(args[0])
+			if err != nil {
+				fmt.Printf("Error resolving path: %v\n", err)
+				os.Exit(1)
+			}
+			mountPoint, err := resolvePathToAbsolute(args[1])
+			if err != nil {
+				fmt.Printf("Error resolving mount point: %v\n", err)
+				os.Exit(1)
+			}
+			resp, err := client.Send("/mount/single", map[string]interface{}{
+				"source_file": sourceFile,
+				"mount_point": mountPoint,
+			})
+			if err != nil {
+				fmt.Printf("Error mounting single file: %v\n", err)
+				os.Exit(1)
+			}
+			var result map[string]interface{}
+			if err := json.Unmarshal(resp, &result); err != nil {
+				fmt.Printf("Error unmarshalling response: %v\n", err)
+				os.Exit(1)
+			}
+			lgr.Info("Mounted single file %s at %s (port: %v)\n", result["source_file"], mountPoint, result["port"])
+		},
+	})
+
 	// Add root level flag for seting the log level
 	rootCmd.PersistentFlags().String("log-level", "info", "Set the log level (debug, info, warn, error)")
 
