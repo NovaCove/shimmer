@@ -75,9 +75,7 @@ func server(lgr *slog.Logger) {
 }
 
 func resolvePathToAbsolute(str string) (string, error) {
-	if strings.HasPrefix(str, "file://") {
-		str = strings.TrimPrefix(str, "file://")
-	}
+	str, _ = strings.CutPrefix(str, "file://")
 	if !strings.HasPrefix(str, "/") {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -105,6 +103,82 @@ func main() {
 		Short: "Start the shimmer server",
 		Run: func(cmd *cobra.Command, args []string) {
 			server(lgr)
+		},
+	})
+
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "unlock",
+		Short: "Unlock the shimmer server",
+		Run: func(cmd *cobra.Command, args []string) {
+			method, err := cmd.Flags().GetString("method")
+			if err != nil {
+				// If we can't get the method flag, it's because we want a default value.
+				method = "touchid"
+			} else if len(method) == 0 {
+				method = "touchid"
+			}
+
+			client := rpc.NewClient("/tmp/shimmer.sock", os.Getpid())
+			resp, err := client.Send("/unlock", mount.AuthRequest{
+				Method: method,
+			})
+			if err != nil {
+				fmt.Printf("Error unlocking: %v\n", err)
+				os.Exit(1)
+			}
+
+			var result struct {
+				Status string `json:"status"`
+			}
+			if err := json.Unmarshal(resp, &result); err != nil {
+				fmt.Printf("Error unmarshalling response: %v\n", err)
+				os.Exit(1)
+			}
+			if result.Status == "not_bootstrapped" {
+				fmt.Println("Shimmer server is not bootstrapped. Please run `shimmer init` first.")
+				os.Exit(1)
+			}
+			lgr.Info("Unlocked shimmer server successfully:\n", result)
+		},
+	})
+
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "init",
+		Short: "Initialize the shimmer server",
+		Run: func(cmd *cobra.Command, args []string) {
+			client := rpc.NewClient("/tmp/shimmer.sock", os.Getpid())
+			resp, err := client.Send("/doctor", nil)
+			if err != nil {
+				fmt.Printf("Error unlocking: %v\n", err)
+				os.Exit(1)
+			}
+
+			var result map[string]interface{}
+			if err := json.Unmarshal(resp, &result); err != nil {
+				fmt.Printf("Error unmarshalling response: %v\n", err)
+				os.Exit(1)
+			}
+			lgr.Info("Unlocked shimmer server successfully:\n", result)
+		},
+	})
+
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "doctor",
+		Short: "Run a health check on the shimmer server",
+		Run: func(cmd *cobra.Command, args []string) {
+			client := rpc.NewClient("/tmp/shimmer.sock", os.Getpid())
+			resp, err := client.Send("/doctor", nil)
+			if err != nil {
+				fmt.Printf("Error unlocking: %v\n", err)
+				os.Exit(1)
+			}
+
+			var result map[string]interface{}
+			if err := json.Unmarshal(resp, &result); err != nil {
+				fmt.Printf("Error unmarshalling response: %v\n", err)
+				os.Exit(1)
+			}
+			lgr.Info("Unlocked shimmer server successfully:\n", result)
 		},
 	})
 

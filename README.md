@@ -7,6 +7,14 @@ Currently, there is a server and client component. Longer term, we'll have the s
 
 Today, we have a skeleton.
 
+# Architecture
+ - There is a daemon that runs, and can be installed to run via launchctl
+ - The core shimmerd server (the daemon above), responds to client interactons via RPC over a unix socket.
+ - It launches local NFS servers to locally mount drives to emulate file system access.
+ - When shutting down, it cleans up each of these NFS servers, to remove any dangling mounts.
+
+
+# Config
 The config should contain information such as:
 
  - directory structures and links to file content, and whether it is read-only or read/write
@@ -28,11 +36,17 @@ The config should contain information such as:
 
 
 # Next steps
- - on first run, see if we have a root key, if not, set one up
- - implement storage for encrypted blobs
- - implement sqlite db or something similar for access history with log truncation
- - share key management in keychain, with rotation based on some value
- - data config management - loading, showing, editing
- - initial file import, with safeguards
- - better onboarding UX - e.g. some nice colored "shimmer bootstrap" command
- -
+ - [ ] add a locked / unlocked state
+ - [ ] add TTLs for shutting down mount servers
+ - [ ] add bootstrap command for initial setup
+    - [ ] on first run, see if we have a root key, if not, set one up
+ - [ ] implement storage for encrypted blobs
+ - [ ] implement sqlite db or something similar for access history with log truncation
+ - [ ] share key management in keychain, with rotation based on some value
+ - [ ] data config management - loading, showing, editing
+ - [ ] initial file import, with safeguards
+ - [ ] better onboarding UX - e.g. some nice colored "shimmer bootstrap" command
+
+ # Future improvements
+  - Only use one NFS server, so that we don't need one per mount
+  - Fork the go-nfs server to pass user and process information to the server, currently this information is lost.
