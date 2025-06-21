@@ -271,7 +271,7 @@ type ContextualFS struct {
 // 	return nil
 // }
 
-func (s *MountServer) mountListener(path, mountPoint string, port int, cacheAsListener bool) error {
+func (s *MountServer) mountListener(path, mountPoint string, port int, cacheAsListener bool, ttl string) error {
 	s.lgr.Info("Mounting path", slog.String("source", path), slog.String("mountPath", mountPoint))
 	if path == "" || mountPoint == "" {
 		return fmt.Errorf("path and mount_point must be provided")
@@ -332,6 +332,19 @@ func (s *MountServer) mountListener(path, mountPoint string, port int, cacheAsLi
 			listener:   listener,
 			mountPoint: mountPoint,
 		})
+
+		go func() {
+			// Keep the listener alive for the specified TTL
+			if len(ttl) > 0 {
+				dur, err := time.ParseDuration(ttl)
+				if err != nil {
+					return
+				}
+				time.Sleep(dur)
+				s.lgr.Info("Stopping listener after TTL", slog.String("ttl", ttl))
+				s.unmountListener(listener, mountPoint)
+			}
+		}()
 	}
 
 	return nil
@@ -345,6 +358,7 @@ func (s *MountServer) StartMountHandler(ctxt context.Context, request []byte) ([
 	var req struct {
 		Path       string `json:"path"`
 		MountPoint string `json:"mount_point"`
+		TTL        string `json:"ttl"`
 	}
 	if err := json.Unmarshal(request, &req); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal request: %w", err)
@@ -353,7 +367,7 @@ func (s *MountServer) StartMountHandler(ctxt context.Context, request []byte) ([
 	// For now, do some port mapping, later we'll prefix in the nfs paths for mounting
 	port := randomPort()
 
-	if err := s.mountListener(req.Path, req.MountPoint, port, true); err != nil {
+	if err := s.mountListener(req.Path, req.MountPoint, port, true, req.TTL); err != nil {
 		s.lgr.Error("Failed to mount listener", slog.String("mountPath", req.MountPoint), slog.Any("error", err))
 		return nil, fmt.Errorf("failed to mount listener for mount point %s: %w", req.MountPoint, err)
 	}
@@ -409,6 +423,7 @@ func (s *MountServer) StartSingleMountFileHandler(ctxt context.Context, request 
 	var req struct {
 		SourceFile string `json:"source_file"` // Path to the source file to be mounted
 		MountPoint string `json:"mount_point"` // Path where the file should be mounted
+		TTL        string `json:"ttl"`
 	}
 	if err := json.Unmarshal(request, &req); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal request: %w", err)
@@ -448,7 +463,7 @@ func (s *MountServer) StartSingleMountFileHandler(ctxt context.Context, request 
 
 	// Mount the directory using NFS
 	s.lgr.Debug("Mounting single file listener", slog.String("sourceFile", req.SourceFile), slog.String("mountPath", linkedDirMountLoc))
-	if err := s.mountListener(baseDir, linkedDirMountLoc, port, false); err != nil {
+	if err := s.mountListener(baseDir, linkedDirMountLoc, port, false, req.TTL); err != nil {
 		s.lgr.Error("Failed to mount single file listener", slog.String("mountPath", linkedDirMountLoc), slog.Any("error", err))
 		return nil, fmt.Errorf("failed to mount single file listener for mount point %s: %w", linkedDirMountLoc, err)
 	}
@@ -462,15 +477,29 @@ func (s *MountServer) StartSingleMountFileHandler(ctxt context.Context, request 
 		return nil, fmt.Errorf("failed to create symlink %s -> %s: %w", linkedFileLoc, req.MountPoint, err)
 	}
 	s.lgr.Info("Created symlink for single file mount", slog.String("linkedFileLoc", linkedFileLoc), slog.String("sourceFile", req.SourceFile))
+	lsnr := s.listeners[len(s.listeners)-1].listener
 	s.singleFileListeners = append(s.singleFileListeners, SingleMountedFileListener{
 		MountedListener: MountedListener{
-			listener:   s.listeners[len(s.listeners)-1].listener, // Use the last listener
+			listener:   lsnr,
 			mountPoint: linkedDirMountLoc,
 		},
 		linkedFileSrcLoc:  req.MountPoint,
 		linkedFileDestLoc: linkedFileLoc,
 	})
 	s.lgr.Info("Single file mounted successfully", slog.String("mountPoint", linkedDirMountLoc), slog.String("linkedFileLoc", linkedFileLoc))
+
+	go func() {
+		if len(req.TTL) > 0 {
+			dur, err := time.ParseDuration(req.TTL)
+			if err != nil {
+				return
+			}
+			time.Sleep(dur)
+			s.lgr.Info("Stopping single file listener after TTL", slog.String("ttl", req.TTL))
+			s.unmountSingleFile(lsnr, linkedDirMountLoc, linkedFileLoc)
+		}
+	}()
+
 	return json.Marshal(map[string]any{
 		"mount_point": linkedDirMountLoc,
 		"linked_file": linkedFileLoc,

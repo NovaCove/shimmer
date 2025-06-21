@@ -36,13 +36,13 @@ The config should contain information such as:
 
 
 # Next steps
- - [ ] add a locked / unlocked state
+ - [x] add a locked / unlocked state
  - [ ] add TTLs for shutting down mount servers
- - [ ] add bootstrap command for initial setup
-    - [ ] on first run, see if we have a root key, if not, set one up
+ - [x] add bootstrap command for initial setup
+    - [x] on first run, see if we have a root key, if not, set one up
  - [ ] implement storage for encrypted blobs
  - [ ] implement sqlite db or something similar for access history with log truncation
- - [ ] share key management in keychain, with rotation based on some value
+ - [x] share key management in keychain, with rotation based on some value
  - [ ] data config management - loading, showing, editing
  - [ ] initial file import, with safeguards
  - [ ] better onboarding UX - e.g. some nice colored "shimmer bootstrap" command

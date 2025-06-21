@@ -182,7 +182,7 @@ func main() {
 		},
 	})
 
-	rootCmd.AddCommand(&cobra.Command{
+	mountCmd := &cobra.Command{
 		Use:   "mount",
 		Short: "mount a new volume",
 		Run: func(cmd *cobra.Command, args []string) {
@@ -202,9 +202,17 @@ func main() {
 				os.Exit(1)
 			}
 
+			ttl, err := cmd.Flags().GetString("ttl")
+			if err != nil {
+				fmt.Printf("Error getting ttl flag: %v\n", err)
+				os.Exit(1)
+			}
+			lgr.Debug("Mounting with TTL: ", slog.String("ttl", ttl))
+
 			resp, err := client.Send("/mount/start", map[string]interface{}{
 				"path":        path,
 				"mount_point": mountPoint,
+				"ttl":         ttl,
 			})
 			if err != nil {
 				fmt.Printf("Error mounting: %v\n", err)
@@ -217,7 +225,9 @@ func main() {
 			}
 			lgr.Info("Mounted %s at %s (port: %v)\n", result["mount_point"], mountPoint, result["port"])
 		},
-	})
+	}
+	mountCmd.Flags().String("ttl", "8h", "Time to live for the mount (default: 8h)")
+	rootCmd.AddCommand(mountCmd)
 
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "mount-single",
@@ -238,9 +248,22 @@ func main() {
 				fmt.Printf("Error resolving mount point: %v\n", err)
 				os.Exit(1)
 			}
+
+			// Get TTL option which is a number
+			ttl, err := cmd.Flags().GetString("ttl")
+			if err != nil {
+				fmt.Printf("Error getting ttl flag: %v\n", err)
+				os.Exit(1)
+			}
+			if len(ttl) == 0 {
+				ttl = "8h"
+			}
+			lgr.Debug("Mounting with TTL: ", slog.String("ttl", ttl))
+
 			resp, err := client.Send("/mount/single", map[string]interface{}{
 				"source_file": sourceFile,
 				"mount_point": mountPoint,
+				"ttl":         ttl,
 			})
 			if err != nil {
 				fmt.Printf("Error mounting single file: %v\n", err)
