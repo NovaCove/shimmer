@@ -147,7 +147,7 @@ func main() {
 		Short: "Initialize the shimmer server",
 		Run: func(cmd *cobra.Command, args []string) {
 			client := rpc.NewClient("/tmp/shimmer.sock", os.Getpid())
-			resp, err := client.Send("/doctor", nil)
+			resp, err := client.Send("/init", nil)
 			if err != nil {
 				fmt.Printf("Error unlocking: %v\n", err)
 				os.Exit(1)

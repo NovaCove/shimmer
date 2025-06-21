@@ -74,33 +74,42 @@ func InitializeSecureKeychain(lgr *slog.Logger) (*SecureKeychainManager, error) 
 		return nil, fmt.Errorf("failed to create secure directory: %w", err)
 	}
 
+	// Ensure root password is set up
+	if err := skm.ensureRootPassword(); err != nil {
+		return nil, err
+	}
+
+	return skm, nil
+}
+
+func (skm *SecureKeychainManager) ensureRootPassword() error {
 	// Check if keychain exists
 	if _, err := os.Stat(skm.keychainPath); err == nil {
 		// Verify keychain integrity before use
 		if err := skm.verifyKeychainIntegrity(); err != nil {
-			return nil, fmt.Errorf("keychain integrity check failed: %w", err)
+			return fmt.Errorf("keychain integrity check failed: %w", err)
 		}
 
 		rootPassword, err := skm.retrieveRootPassword()
 		if err != nil {
-			return nil, fmt.Errorf("failed to retrieve root password: %w", err)
+			return fmt.Errorf("failed to retrieve root password: %w", err)
 		}
 		skm.rootPassword = rootPassword
 
 		skm.auditLog("keychain_access", "success", "retrieved existing root password")
-		return skm, nil
+		return nil
 	}
 
 	// Create new secure keychain
 	rootPassword, err := skm.createSecureKeychain()
 	if err != nil {
 		skm.auditLog("keychain_creation", "failed", err.Error())
-		return nil, fmt.Errorf("failed to create secure keychain: %w", err)
+		return fmt.Errorf("failed to create secure keychain: %w", err)
 	}
 
 	skm.auditLog("keychain_creation", "success", "created new keychain")
 	skm.rootPassword = rootPassword
-	return skm, nil
+	return nil
 }
 
 // getHardwareIdentifier derives a unique hardware-based identifier
@@ -293,6 +302,12 @@ func (skm *SecureKeychainManager) storePasswordWithSecurity(service, account, pa
 	}
 
 	// Add generic password
+	skm.lgr.Debug("skm:storePasswordWithSecurity",
+		slog.String("service", service),
+		slog.String("account", account),
+		slog.String("currentPath", currentPath),
+		slog.String("keychainPath", skm.keychainPath),
+	)
 	addCmd := exec.Command("security", "add-generic-password",
 		"-s", service,
 		"-a", account,
@@ -500,6 +515,11 @@ func (skm *SecureKeychainManager) RetrieveToken(tokenType, identifier string) (s
 		"-a", identifier,
 		"-w", // Return password only
 		skm.keychainPath)
+	skm.lgr.Debug("skm:storePasswordWithSecurity",
+		slog.String("service", serviceName),
+		slog.String("account", identifier),
+		slog.String("keychainPath", skm.keychainPath),
+	)
 
 	output, err := findCmd.Output()
 	if err != nil {
@@ -653,6 +673,12 @@ func (skm *SecureKeychainManager) RetrieveEncryptionKey(identifier string) (stri
 	serviceName := fmt.Sprintf("%s-encryption-key", daemonName)
 
 	// Find and retrieve encryption key
+
+	skm.lgr.Debug("skm:storePasswordWithSecurity",
+		slog.String("service", serviceName),
+		slog.String("account", identifier),
+		slog.String("keychainPath", skm.keychainPath),
+	)
 	findCmd := exec.Command("security", "find-generic-password",
 		"-s", serviceName,
 		"-a", identifier,

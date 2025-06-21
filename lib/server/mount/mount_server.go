@@ -146,15 +146,13 @@ const EncKeyInternalDataName = "internal-data-encryption-key"
 
 func (s *MountServer) dataDirPath() (string, error) {
 	// Get the home directory and create the shimmer data directory if it doesn't exist
-	dataPath, err := homeShimmerDir()
+	dataPath, err := internalDataDirPath()
 	if err != nil {
 		return "", fmt.Errorf("failed to get shimmer data directory: %w", err)
 	}
 
 	s.lgr.Debug("Data directory path:", slog.String("dataPath", dataPath))
-	return filepath.Join(
-		dataPath, "internaldata",
-	), nil
+	return dataPath, nil
 }
 
 func (s *MountServer) initializeInternalData() error {
@@ -173,6 +171,7 @@ func (s *MountServer) initializeInternalData() error {
 
 	s.internalData = internaldata.NewInternalData(dataPath, []byte(internalDataKey), s.lgr, s.skm)
 
+	s.lgr.Debug("Loading internal data storage")
 	if err := s.internalData.Load(); err != nil {
 		return fmt.Errorf("failed to load internal data: %w", err)
 	}
@@ -194,9 +193,7 @@ func (s *MountServer) checkLaunchctlSetup() error {
 	if err != nil {
 		s.lgr.Warn("Failed to check launchctl status", slog.Any("error", err))
 		return fmt.Errorf("failed to check launchctl status: %w", err)
-	}
-	s.lgr.Debug("Launchctl output:", slog.String("output", string(output)))
-	if !strings.Contains(string(output), "shimmer") {
+	} else if !strings.Contains(string(output), "shimmer") {
 		s.lgr.Warn("Server is not managed by launchctl, please consider using launchctl to manage the server")
 		return fmt.Errorf("server is not managed by launchctl, please consider using launchctl to manage the server")
 	}
@@ -388,6 +385,22 @@ func homeShimmerDir() (string, error) {
 		return "", fmt.Errorf("failed to create shimmer directory %s: %w", shimmerDirPath, err)
 	}
 	return shimmerDirPath, nil
+}
+
+var internalDataDirName = "internaldata"
+
+func internalDataDirPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get user home directory: %w", err)
+	}
+
+	// Create the internal data directory if it doesn't exist
+	internalDataDir := filepath.Join(homeDir, shimmerDir, internalDataDirName)
+	if err := os.MkdirAll(internalDataDir, 0755); err != nil {
+		return "", err
+	}
+	return internalDataDir, nil
 }
 
 func (s *MountServer) StartSingleMountFileHandler(ctxt context.Context, request []byte) ([]byte, error) {

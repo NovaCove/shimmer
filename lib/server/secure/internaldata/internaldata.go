@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/NovaCove/shimmer/lib/logger"
 	"github.com/NovaCove/shimmer/lib/server/config"
 	"github.com/NovaCove/shimmer/lib/server/secure/encryptedfs"
 	"github.com/NovaCove/shimmer/lib/server/secure/keymanagement"
@@ -91,7 +92,10 @@ func (id *internalData) Bootstrap() error {
 func (id *internalData) Load() error {
 	opts := badger.DefaultOptions("").
 		WithIndexCacheSize(100 * 1024 * 1024). // 100 MB
-		WithEncryptionKey(id.encryptionKey)
+		WithEncryptionKey(id.encryptionKey[0:32]).
+		WithDir(id.dataPath).
+		WithValueDir(id.dataPath).
+		WithLogger(logger.AdaptLoggerToBadgerLogger(id.lgr))
 
 	var err error
 	if id.db, err = badger.Open(opts); err != nil {
