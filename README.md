@@ -7,14 +7,26 @@ Currently, there is a server and client component. Longer term, we'll have the s
 
 Today, we have a skeleton.
 
-# Architecture
+# Getting Started
+
+## Installation
+```
+brew install shimmer
+```
+
+## Initial boostrap
+
+
+
+# Internals
+## Architecture
  - There is a daemon that runs, and can be installed to run via launchctl
  - The core shimmerd server (the daemon above), responds to client interactons via RPC over a unix socket.
  - It launches local NFS servers to locally mount drives to emulate file system access.
  - When shutting down, it cleans up each of these NFS servers, to remove any dangling mounts.
 
 
-# Config
+## Config
 The config should contain information such as:
 
  - directory structures and links to file content, and whether it is read-only or read/write
@@ -23,7 +35,7 @@ The config should contain information such as:
  - drop honeypots (which ones to drop)?
 
 
-# Authentication
+## Authentication
  - Ideal authentication flow is that the client uses touchID to get a keychain item that
  is a shared secret value. It then creates a salt and hashes that secret value, to be verified
  by the server.
@@ -49,6 +61,6 @@ The config should contain information such as:
  - [ ] initial file import, with safeguards
  - [ ] better onboarding UX - e.g. some nice colored "shimmer bootstrap" command
 
- # Future improvements
+ ## Future improvements
   - Only use one NFS server, so that we don't need one per mount
   - Fork the go-nfs server to pass user and process information to the server, currently this information is lost.
