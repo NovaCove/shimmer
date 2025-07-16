@@ -15,14 +15,15 @@ import (
 	"sync"
 	"time"
 
+	touchid "github.com/NovaCove/shimmer/lib/auth/touchid"
 	"github.com/go-git/go-billy/v5"
-	touchid "github.com/lox/go-touchid"
 	nfs "github.com/willscott/go-nfs"
 	nfshelper "github.com/willscott/go-nfs/helpers"
 
 	"github.com/willscott/memphis"
 
 	serrors "github.com/NovaCove/shimmer/lib/errors"
+	"github.com/NovaCove/shimmer/lib/server/config"
 	"github.com/NovaCove/shimmer/lib/server/rpc"
 	"github.com/NovaCove/shimmer/lib/server/secure/internaldata"
 	"github.com/NovaCove/shimmer/lib/server/secure/keymanagement"
@@ -532,7 +533,7 @@ type AuthMethod func(ctx context.Context, request AuthRequest) (bool, error)
 
 var authMap = map[string]AuthMethod{
 	"touchid": func(ctx context.Context, request AuthRequest) (bool, error) {
-		success, err := touchid.Authenticate("Unlock shimmer")
+		success, err := touchid.AuthenticateTouch("Unlock shimmer")
 		if err != nil {
 			return false, err
 		}
@@ -663,10 +664,33 @@ func (s *MountServer) Doctor(ctxt context.Context, request []byte) ([]byte, erro
 	return json.Marshal(defaultResponse)
 }
 
+type ListKnownMountsResponse struct {
+	Mounts []config.MountConfig `json:"mounts"`
+}
+
+func (s *MountServer) ListKnownMounts(ctxt context.Context, request []byte) ([]byte, error) {
+	s.lgr.Debug("Listing known mounts")
+	if s.internalData == nil {
+		return nil, fmt.Errorf("internal data is not initialized")
+	}
+
+	mounts, err := s.internalData.LoadMounts()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load mounts: %w", err)
+	}
+
+	response := ListKnownMountsResponse{
+		Mounts: mounts.Mounts,
+	}
+	return json.Marshal(response)
+}
+
 func (s *MountServer) Start() error {
 	s.Server.RegisterHandler("/auth/check", s.handlerAuthWrapper(s.IsPIDAuthenticatedHandler))
 	s.Server.RegisterHandler("/mount/start", s.handlerAuthWrapper(s.StartMountHandler))
 	s.Server.RegisterHandler("/mount/single", s.handlerAuthWrapper(s.StartSingleMountFileHandler))
+	// s.Server.RegisterHandler("/mount/list", s.handlerAuthWrapper(s.ListKnownMounts))
+	s.Server.RegisterHandler("/mount/list", s.ListKnownMounts)
 	s.Server.RegisterHandler("/unlock", s.Authenticate)
 	s.Server.RegisterHandler("/doctor", s.Doctor)
 	s.Server.RegisterHandler("/init", s.Init)

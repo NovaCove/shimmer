@@ -278,6 +278,60 @@ func main() {
 		},
 	})
 
+	cmd := &cobra.Command{
+		Use:   "mounts",
+		Short: "List all mounts",
+		Run: func(cmd *cobra.Command, args []string) {
+			client := rpc.NewClient("/tmp/shimmer.sock", os.Getpid())
+			resp, err := client.Send("/mount/list", nil)
+			if err != nil {
+				fmt.Printf("Error listing mounts: %v\n", err)
+				os.Exit(1)
+			}
+			var mounts mount.ListKnownMountsResponse
+			if err := json.Unmarshal(resp, &mounts); err != nil {
+				fmt.Printf("Error unmarshalling response: %v\n", err)
+				os.Exit(1)
+			}
+			if len(mounts.Mounts) == 0 {
+				fmt.Println("No mounts found.")
+				return
+			}
+			fmt.Println("Known mounts:")
+			for _, m := range mounts.Mounts {
+				fmt.Printf("Mount Point: %s, Source: %s, Enc Key ID: %s,\n",
+					m.MountPath, m.SourceDir.Path, m.EncryptionKeyID)
+			}
+		},
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "list",
+		Short: "List all mounts",
+		Run: func(cmd *cobra.Command, args []string) {
+			client := rpc.NewClient("/tmp/shimmer.sock", os.Getpid())
+			resp, err := client.Send("/mount/list", nil)
+			if err != nil {
+				fmt.Printf("Error listing mounts: %v\n", err)
+				os.Exit(1)
+			}
+			var mounts mount.ListKnownMountsResponse
+			if err := json.Unmarshal(resp, &mounts); err != nil {
+				fmt.Printf("Error unmarshalling response: %v\n", err)
+				os.Exit(1)
+			}
+			if len(mounts.Mounts) == 0 {
+				fmt.Println("No mounts found.")
+				return
+			}
+			fmt.Println("Known mounts:")
+			for _, m := range mounts.Mounts {
+				fmt.Printf("Mount Point: %s, Source: %s, Enc Key ID: %s,\n",
+					m.MountPath, m.SourceDir, m.EncryptionKeyID)
+			}
+		},
+	})
+	rootCmd.AddCommand(cmd)
+
 	// Add root level flag for seting the log level
 	rootCmd.PersistentFlags().String("log-level", "info", "Set the log level (debug, info, warn, error)")
 

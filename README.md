@@ -37,11 +37,13 @@ The config should contain information such as:
 
 # Next steps
  - [x] add a locked / unlocked state
- - [ ] add TTLs for shutting down mount servers
+ - [x] add TTLs for shutting down mount servers
  - [x] add bootstrap command for initial setup
     - [x] on first run, see if we have a root key, if not, set one up
+ - [ ] diagnostics command
  - [ ] implement storage for encrypted blobs
- - [ ] implement sqlite db or something similar for access history with log truncation
+ - [ ] implement sqlite db or something similar for access history
+ - [ ] log truncation
  - [x] share key management in keychain, with rotation based on some value
  - [ ] data config management - loading, showing, editing
  - [ ] initial file import, with safeguards
