@@ -51,9 +51,10 @@ func getLogger() *slog.Logger {
 
 func handleAuthCliError(resp rpc.DataResponse) {
 	if resp.Error != "" {
-		fmt.Printf("Error: %s\n", resp.Error)
 		if resp.Error == mount.ErrServerIsLocked.Error() {
 			fmt.Println("Shimmer server is currently locked. Please run `shimmer unlock` first.")
+		} else {
+			fmt.Printf("Error: %s\n", resp.Error)
 		}
 		os.Exit(1)
 	}

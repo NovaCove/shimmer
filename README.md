@@ -52,7 +52,7 @@ The config should contain information such as:
  - [x] add TTLs for shutting down mount servers
  - [x] add bootstrap command for initial setup
     - [x] on first run, see if we have a root key, if not, set one up
- - [ ] diagnostics command
+ - [x] diagnostics command
  - [ ] implement storage for encrypted blobs
  - [ ] implement sqlite db or something similar for access history
  - [ ] log truncation
@@ -60,6 +60,7 @@ The config should contain information such as:
  - [ ] data config management - loading, showing, editing
  - [ ] initial file import, with safeguards
  - [ ] better onboarding UX - e.g. some nice colored "shimmer bootstrap" command
+ - [ ] Actually harden the rpc protocol - magic cookies, multiplexing, connection lifecycle, etc
 
  ## Future improvements
   - Only use one NFS server, so that we don't need one per mount

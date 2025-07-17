@@ -125,10 +125,14 @@ type DataResponse struct {
 }
 
 func returnErrViaConn(conn net.Conn, err error) error {
-	return json.NewEncoder(conn).Encode(DataResponse{
+	data, err := json.Marshal(DataResponse{
 		Data:  nil,
 		Error: err.Error(),
 	})
+	if err != nil {
+		return err
+	}
+	return writeMessage(conn, data)
 }
 
 func (s *Server) Authenticate(pid int) (bool, error) {

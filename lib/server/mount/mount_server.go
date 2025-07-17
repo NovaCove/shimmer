@@ -205,7 +205,7 @@ func (s *MountServer) checkLaunchctlSetup() error {
 
 func (s *MountServer) Initialize(ctxt context.Context) error {
 	s.lgr.Debug("Initializing mount server")
-	if s.GetServerState() != ServerStateStopped {
+	if s.GetServerState() != ServerStateStopped && s.GetServerState() != ServerStateLocked {
 		return fmt.Errorf("server is not in stopped state, cannot start, current state: %s", s.GetServerState().String())
 	}
 
@@ -516,10 +516,7 @@ func (s *MountServer) handlerAuthWrapper(handler rpc.Handler) rpc.Handler {
 	return func(ctxt context.Context, request []byte) ([]byte, error) {
 		if s.GetServerState() == ServerStateLocked {
 			s.lgr.Warn("Server is locked, authentication required")
-			return json.Marshal(rpc.DataResponse{
-				Data:  nil,
-				Error: ErrServerIsLocked.Error(),
-			})
+			return nil, ErrServerIsLocked
 		}
 		// if !s.IsPIDAuthenticated(s.PID) {
 		// 	return nil, fmt.Errorf("pid %d is not authenticated", s.PID)
@@ -688,6 +685,9 @@ func (s *MountServer) ListKnownMounts(ctxt context.Context, request []byte) ([]b
 	s.lgr.Debug("Loaded mounts from internal data", slog.Int("numMounts", len(mounts.Mounts)))
 	response := ListKnownMountsResponse{
 		Mounts: mounts.Mounts,
+	}
+	if response.Mounts == nil {
+		response.Mounts = []config.MountConfig{}
 	}
 	data, err := json.Marshal(response)
 	if err != nil {
