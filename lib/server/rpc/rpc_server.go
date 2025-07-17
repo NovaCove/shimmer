@@ -2,12 +2,14 @@ package rpc
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net"
 	"os"
 
-	touchid "github.com/lox/go-touchid"
+	touchid "github.com/NovaCove/shimmer/lib/auth/touchid"
 )
 
 type Handler func(context context.Context, request []byte) ([]byte, error)
@@ -59,7 +61,7 @@ type Request struct {
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
-	defer conn.Close()
+	// defer conn.Close()
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -68,11 +70,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 	}()
 
-	// Read the full packet from the connection, and unmartial it into a request.
-	decoder := json.NewDecoder(conn)
+	reqRaw, err := readMessage(conn)
+	if err != nil {
+		s.Lgr.Error("failed to read message from connection:", err)
+		return
+	}
 
 	var request Request
-	if err := decoder.Decode(&request); err != nil {
+	if err := json.Unmarshal(reqRaw, &request); err != nil {
 		// If we can't decode the request, we can just close the connection.
 		return
 	}
@@ -87,23 +92,47 @@ func (s *Server) handleConnection(conn net.Conn) {
 	s.Lgr.Debug("Handling request", "command", request.Command, "pid", request.PID)
 	response, err := handler(context.Background(), request.Payload)
 	if err != nil {
-		// If the handler returns an error, we can just close the connection.
+		s.Lgr.Error("Error handling request", "command", request.Command, "pid", request.PID, "error", err)
+		if err := returnErrViaConn(conn, err); err != nil {
+			s.Lgr.Error("Error sending error response", "command", request.Command, "pid", request.PID, "error", err)
+		}
 		return
 	}
 
 	s.Lgr.Debug("Response from handler", "command", request.Command, "pid", request.PID)
-	// Marshal the response and write it back to the connection.
-	encoder := json.NewEncoder(conn)
-	if err := encoder.Encode(response); err != nil {
+
+	respRaw, err := json.Marshal(DataResponse{
+		Data:  response,
+		Error: "",
+	})
+	if err != nil {
 		// If we can't encode the response, we can just close the connection.
+		s.Lgr.Error("Error encoding response", "command", request.Command, "pid", request.PID, "error", err)
+		return
+	} else if err := writeMessage(conn, respRaw); err != nil {
+		s.Lgr.Error("failed to send response:", err)
 		return
 	}
+
+	s.Lgr.Debug(string(response))
 
 	s.Lgr.Debug("Response sent for command", "command", request.Command, "pid", request.PID)
 }
 
+type DataResponse struct {
+	Data  json.RawMessage `json:"data"`
+	Error string          `json:"error,omitempty"`
+}
+
+func returnErrViaConn(conn net.Conn, err error) error {
+	return json.NewEncoder(conn).Encode(DataResponse{
+		Data:  nil,
+		Error: err.Error(),
+	})
+}
+
 func (s *Server) Authenticate(pid int) (bool, error) {
-	ok, err := touchid.Authenticate("access llamas")
+	ok, err := touchid.AuthenticateTouch("access llamas")
 	if err != nil {
 		return false, err
 	}
@@ -165,13 +194,16 @@ func (s *Server) Start() error {
 type Client struct {
 	UnixSocket string
 	PID        int
+	lgr        *slog.Logger
+	// activeConn net.Conn // Keep track of the active connection for the client
 }
 
 // NewClient creates a new Client instance with the specified Unix socket path.
-func NewClient(unixSocket string, pid int) *Client {
+func NewClient(unixSocket string, pid int, logLevel slog.Level) *Client {
 	return &Client{
 		UnixSocket: unixSocket,
 		PID:        pid,
+		lgr:        slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: &logLevel})),
 	}
 }
 
@@ -196,18 +228,49 @@ func (c *Client) Send(command string, payload interface{}) ([]byte, error) {
 		request.Payload = data
 	}
 
-	encoder := json.NewEncoder(conn)
-	if err := encoder.Encode(request); err != nil {
+	c.lgr.Debug("Sending request", "command", command, "pid", c.PID)
+	reqPayload, err := json.Marshal(request)
+	if err != nil {
+		c.lgr.Error("Error marshaling request", "command", command, "pid", c.PID, "error", err)
 		return nil, err
 	}
 
-	var response []byte
-	decoder := json.NewDecoder(conn)
-	if err := decoder.Decode(&response); err != nil {
+	if err := writeMessage(conn, reqPayload); err != nil {
+		c.lgr.Error("Error writing request to connection", "command", command, "pid", c.PID, "error", err)
 		return nil, err
 	}
 
-	return response, nil
+	c.lgr.Debug("Request sent", "command", command, "pid", c.PID)
+	respRaw, err := readMessage(conn)
+	if err != nil {
+		c.lgr.Error("Error reading response from connection", "command", command, "pid", c.PID, "error", err)
+		return nil, err
+	}
+
+	c.lgr.Debug("Response received", "command", command, "pid", c.PID)
+	return respRaw, nil
+}
+
+func writeMessage(conn net.Conn, data []byte) error {
+	length := uint32(len(data))
+	if err := binary.Write(conn, binary.BigEndian, length); err != nil {
+		return err
+	}
+
+	_, err := conn.Write(data)
+	return err
+}
+
+// Reading a message
+func readMessage(conn net.Conn) ([]byte, error) {
+	var length uint32
+	if err := binary.Read(conn, binary.BigEndian, &length); err != nil {
+		return nil, err
+	}
+
+	data := make([]byte, length)
+	_, err := io.ReadFull(conn, data)
+	return data, err
 }
 
 // Stop stops the server by closing the listener.

@@ -90,6 +90,7 @@ func (id *internalData) Bootstrap() error {
 }
 
 func (id *internalData) Load() error {
+	id.lgr.Debug("Loading internal data", "dataPath", id.dataPath)
 	opts := badger.DefaultOptions("").
 		WithIndexCacheSize(100 * 1024 * 1024). // 100 MB
 		WithEncryptionKey(id.encryptionKey[0:32]).
@@ -99,6 +100,7 @@ func (id *internalData) Load() error {
 
 	var err error
 	if id.db, err = badger.Open(opts); err != nil {
+		id.lgr.Error("Failed to open Badger database", "error", err)
 		return err
 	}
 
@@ -123,6 +125,10 @@ func (id *internalData) LoadMounts() (*config.DataConfig, error) {
 	})
 
 	if err != nil {
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			id.lgr.Debug("No mounts found in database, returning empty mounts config")
+			return &mounts, nil
+		}
 		return nil, err
 	}
 

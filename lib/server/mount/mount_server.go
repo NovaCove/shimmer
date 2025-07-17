@@ -108,7 +108,7 @@ type ServerDiagnostic struct {
 func NewMountServer(unixSocket string, pid int, lgr *slog.Logger) *MountServer {
 	return &MountServer{
 		state: serverState{
-			state: ServerStateStopped,
+			state: ServerStateLocked,
 		},
 		Server:              rpc.NewServer(unixSocket, lgr),
 		PID:                 pid,
@@ -515,7 +515,11 @@ func randomPort() int {
 func (s *MountServer) handlerAuthWrapper(handler rpc.Handler) rpc.Handler {
 	return func(ctxt context.Context, request []byte) ([]byte, error) {
 		if s.GetServerState() == ServerStateLocked {
-			return nil, ErrServerIsLocked
+			s.lgr.Warn("Server is locked, authentication required")
+			return json.Marshal(rpc.DataResponse{
+				Data:  nil,
+				Error: ErrServerIsLocked.Error(),
+			})
 		}
 		// if !s.IsPIDAuthenticated(s.PID) {
 		// 	return nil, fmt.Errorf("pid %d is not authenticated", s.PID)
@@ -674,15 +678,22 @@ func (s *MountServer) ListKnownMounts(ctxt context.Context, request []byte) ([]b
 		return nil, fmt.Errorf("internal data is not initialized")
 	}
 
+	s.lgr.Debug("Loading mounts from internal data")
 	mounts, err := s.internalData.LoadMounts()
 	if err != nil {
+		s.lgr.Error("Failed to load mounts from internal data", slog.Any("error", err))
 		return nil, fmt.Errorf("failed to load mounts: %w", err)
 	}
 
+	s.lgr.Debug("Loaded mounts from internal data", slog.Int("numMounts", len(mounts.Mounts)))
 	response := ListKnownMountsResponse{
 		Mounts: mounts.Mounts,
 	}
-	return json.Marshal(response)
+	data, err := json.Marshal(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal response: %w", err)
+	}
+	return data, nil
 }
 
 func (s *MountServer) Start() error {

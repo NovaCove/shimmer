@@ -49,6 +49,21 @@ func getLogger() *slog.Logger {
 	return lgr
 }
 
+func handleAuthCliError(resp rpc.DataResponse) {
+	if resp.Error != "" {
+		fmt.Printf("Error: %s\n", resp.Error)
+		if resp.Error == mount.ErrServerIsLocked.Error() {
+			fmt.Println("Shimmer server is currently locked. Please run `shimmer unlock` first.")
+		}
+		os.Exit(1)
+	}
+}
+
+func newClient(socketPath string, pid int) *rpc.Client {
+	client := rpc.NewClient(socketPath, pid, logLevel.Level())
+	return client
+}
+
 func server(lgr *slog.Logger) {
 	lgr.Debug("Creating mount server...")
 	srvr := mount.NewMountServer("/tmp/shimmer.sock", os.Getpid(), lgr)
@@ -118,7 +133,7 @@ func main() {
 				method = "touchid"
 			}
 
-			client := rpc.NewClient("/tmp/shimmer.sock", os.Getpid())
+			client := newClient("/tmp/shimmer.sock", os.Getpid())
 			resp, err := client.Send("/unlock", mount.AuthRequest{
 				Method: method,
 			})
@@ -127,10 +142,16 @@ func main() {
 				os.Exit(1)
 			}
 
+			var dResp rpc.DataResponse
+			if err := json.Unmarshal(resp, &dResp); err != nil {
+				fmt.Printf("Error unmarshalling response: %v\n", err)
+				os.Exit(1)
+			}
+
 			var result struct {
 				Status string `json:"status"`
 			}
-			if err := json.Unmarshal(resp, &result); err != nil {
+			if err := json.Unmarshal(dResp.Data, &result); err != nil {
 				fmt.Printf("Error unmarshalling response: %v\n", err)
 				os.Exit(1)
 			}
@@ -146,19 +167,25 @@ func main() {
 		Use:   "init",
 		Short: "Initialize the shimmer server",
 		Run: func(cmd *cobra.Command, args []string) {
-			client := rpc.NewClient("/tmp/shimmer.sock", os.Getpid())
+			client := newClient("/tmp/shimmer.sock", os.Getpid())
 			resp, err := client.Send("/init", nil)
 			if err != nil {
 				fmt.Printf("Error unlocking: %v\n", err)
 				os.Exit(1)
 			}
 
-			var result map[string]interface{}
-			if err := json.Unmarshal(resp, &result); err != nil {
+			var dResp rpc.DataResponse
+			if err := json.Unmarshal(resp, &dResp); err != nil {
 				fmt.Printf("Error unmarshalling response: %v\n", err)
 				os.Exit(1)
 			}
-			lgr.Info("Unlocked shimmer server successfully:\n", result)
+
+			var result map[string]interface{}
+			if err := json.Unmarshal(dResp.Data, &result); err != nil {
+				fmt.Printf("Error unmarshalling response: %v\n", err)
+				os.Exit(1)
+			}
+			lgr.Info("Initialized shimmer server successfully:\n", result)
 		},
 	})
 
@@ -166,15 +193,21 @@ func main() {
 		Use:   "doctor",
 		Short: "Run a health check on the shimmer server",
 		Run: func(cmd *cobra.Command, args []string) {
-			client := rpc.NewClient("/tmp/shimmer.sock", os.Getpid())
+			client := newClient("/tmp/shimmer.sock", os.Getpid())
 			resp, err := client.Send("/doctor", nil)
 			if err != nil {
 				fmt.Printf("Error unlocking: %v\n", err)
 				os.Exit(1)
 			}
 
+			var dResp rpc.DataResponse
+			if err := json.Unmarshal(resp, &dResp); err != nil {
+				fmt.Printf("Error unmarshalling response: %v\n", err)
+				os.Exit(1)
+			}
+
 			var result map[string]interface{}
-			if err := json.Unmarshal(resp, &result); err != nil {
+			if err := json.Unmarshal(dResp.Data, &result); err != nil {
 				fmt.Printf("Error unmarshalling response: %v\n", err)
 				os.Exit(1)
 			}
@@ -186,7 +219,7 @@ func main() {
 		Use:   "mount",
 		Short: "mount a new volume",
 		Run: func(cmd *cobra.Command, args []string) {
-			client := rpc.NewClient("/tmp/shimmer.sock", os.Getpid())
+			client := newClient("/tmp/shimmer.sock", os.Getpid())
 			if len(args) < 2 {
 				fmt.Println("Usage: shimmer mount <path> <mount_point>")
 				os.Exit(1)
@@ -218,8 +251,15 @@ func main() {
 				fmt.Printf("Error mounting: %v\n", err)
 				os.Exit(1)
 			}
+
+			var dResp rpc.DataResponse
+			if err := json.Unmarshal(resp, &dResp); err != nil {
+				fmt.Printf("Error unmarshalling response: %v\n", err)
+				os.Exit(1)
+			}
+
 			var result map[string]interface{}
-			if err := json.Unmarshal(resp, &result); err != nil {
+			if err := json.Unmarshal(dResp.Data, &result); err != nil {
 				fmt.Printf("Error unmarshalling response: %v\n", err)
 				os.Exit(1)
 			}
@@ -233,7 +273,7 @@ func main() {
 		Use:   "mount-single",
 		Short: "Mount a single file",
 		Run: func(cmd *cobra.Command, args []string) {
-			client := rpc.NewClient("/tmp/shimmer.sock", os.Getpid())
+			client := newClient("/tmp/shimmer.sock", os.Getpid())
 			if len(args) < 2 {
 				fmt.Println("Usage: shimmer mount-single <path> <mount_point>")
 				os.Exit(1)
@@ -269,8 +309,15 @@ func main() {
 				fmt.Printf("Error mounting single file: %v\n", err)
 				os.Exit(1)
 			}
+
+			var dResp rpc.DataResponse
+			if err := json.Unmarshal(resp, &dResp); err != nil {
+				fmt.Printf("Error unmarshalling response: %v\n", err)
+				os.Exit(1)
+			}
+
 			var result map[string]interface{}
-			if err := json.Unmarshal(resp, &result); err != nil {
+			if err := json.Unmarshal(dResp.Data, &result); err != nil {
 				fmt.Printf("Error unmarshalling response: %v\n", err)
 				os.Exit(1)
 			}
@@ -280,45 +327,38 @@ func main() {
 
 	cmd := &cobra.Command{
 		Use:   "mounts",
-		Short: "List all mounts",
+		Short: "Jump into the mounts subcommand",
+		Long:  `This command allows you to manage mounts in the shimmer server.`,
 		Run: func(cmd *cobra.Command, args []string) {
-			client := rpc.NewClient("/tmp/shimmer.sock", os.Getpid())
-			resp, err := client.Send("/mount/list", nil)
-			if err != nil {
-				fmt.Printf("Error listing mounts: %v\n", err)
-				os.Exit(1)
-			}
-			var mounts mount.ListKnownMountsResponse
-			if err := json.Unmarshal(resp, &mounts); err != nil {
-				fmt.Printf("Error unmarshalling response: %v\n", err)
-				os.Exit(1)
-			}
-			if len(mounts.Mounts) == 0 {
-				fmt.Println("No mounts found.")
-				return
-			}
-			fmt.Println("Known mounts:")
-			for _, m := range mounts.Mounts {
-				fmt.Printf("Mount Point: %s, Source: %s, Enc Key ID: %s,\n",
-					m.MountPath, m.SourceDir.Path, m.EncryptionKeyID)
-			}
+			fmt.Println("Please use 'shimmer mounts list' to list all mounts.")
+			fmt.Println("Use 'shimmer mounts <subcommand>' for more options.")
+			os.Exit(0)
 		},
 	}
 	cmd.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List all mounts",
 		Run: func(cmd *cobra.Command, args []string) {
-			client := rpc.NewClient("/tmp/shimmer.sock", os.Getpid())
+			client := newClient("/tmp/shimmer.sock", os.Getpid())
 			resp, err := client.Send("/mount/list", nil)
 			if err != nil {
 				fmt.Printf("Error listing mounts: %v\n", err)
 				os.Exit(1)
 			}
-			var mounts mount.ListKnownMountsResponse
-			if err := json.Unmarshal(resp, &mounts); err != nil {
+
+			var dResp rpc.DataResponse
+			if err := json.Unmarshal(resp, &dResp); err != nil {
 				fmt.Printf("Error unmarshalling response: %v\n", err)
 				os.Exit(1)
 			}
+			handleAuthCliError(dResp)
+
+			var mounts mount.ListKnownMountsResponse
+			if err := json.Unmarshal(dResp.Data, &mounts); err != nil {
+				fmt.Printf("Error unmarshalling response: %v\n", err)
+				os.Exit(1)
+			}
+
 			if len(mounts.Mounts) == 0 {
 				fmt.Println("No mounts found.")
 				return
