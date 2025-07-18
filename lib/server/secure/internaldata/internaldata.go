@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/dgraph-io/badger/v4"
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/osfs"
+	"github.com/go-git/go-billy/v5/util"
 )
 
 type InternalData interface {
@@ -34,6 +36,7 @@ type InternalData interface {
 	RetrieveMountByName(name string) (billy.Filesystem, error)
 	DeleteMountByName(name string) error
 	InvalidateMount(name string) error
+	EjectKnownMount(name string) error
 }
 
 type internalData struct {
@@ -317,6 +320,34 @@ func (id *internalData) DeleteMountByName(name string) error {
 	return ErrMountNotFound
 }
 
+type FSSafeBillyFS struct {
+	billy.Filesystem
+}
+
+func (fs *FSSafeBillyFS) Open(name string) (fs.File, error) {
+	f, err := fs.Filesystem.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return FSSafeFile{
+		File: f,
+		fs:   fs.Filesystem,
+	}, nil
+}
+
+type FSSafeFile struct {
+	billy.File
+	fs billy.Filesystem
+}
+
+func (f FSSafeFile) Stat() (fs.FileInfo, error) {
+	// Ensure that the file is not nil before calling Stat
+	if f.File == nil {
+		return nil, errors.New("file is nil")
+	}
+	return f.fs.Stat(f.Name())
+}
+
 func (id *internalData) InvalidateMount(name string) error {
 	if id.mounts == nil {
 		return errors.New("mounts are not loaded")
@@ -337,4 +368,99 @@ func (id *internalData) InvalidateMount(name string) error {
 	}
 
 	return ErrMountNotFound
+}
+
+func (id *internalData) EjectKnownMount(name string) error {
+	if id.mounts == nil {
+		return errors.New("mounts are not loaded")
+	}
+
+	var conf *config.MountConfig
+	for i, mount := range id.mounts.Mounts {
+		if mount.Name == name {
+			conf = &mount
+			id.mounts.Mounts = append(id.mounts.Mounts[:i], id.mounts.Mounts[i+1:]...)
+			break
+		}
+	}
+
+	for i, singleFile := range id.mounts.SingleFiles {
+		if singleFile.Name == name {
+			conf = &singleFile.MountConfig
+			id.mounts.SingleFiles = append(id.mounts.SingleFiles[:i], id.mounts.SingleFiles[i+1:]...)
+			break
+		}
+	}
+
+	if conf == nil {
+		id.lgr.Error("Mount configuration not found for ejection", "name", name)
+		return ErrMountNotFound
+	}
+
+	efs, err := id.DecryptMount(conf)
+	if err != nil {
+		id.lgr.Error("Failed to decrypt mount for ejection", "name", name, "error", err)
+		return err
+	}
+	if efs == nil {
+		id.lgr.Error("Failed to retrieve mount filesystem for ejection", "name", name)
+		return ErrMountNotFound
+	}
+
+	ofs := osfs.New(conf.SourceDir.Path)
+
+	// Walk the encrypted filesystem, replacing every unencrypted file back to the original source
+	// directory.
+	sfs := &FSSafeBillyFS{efs}
+	err = util.Walk(efs, "/", func(path string, d os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			id.lgr.Debug("Removing directory", "path", path)
+			if err := ofs.MkdirAll(path, d.Mode()); err != nil {
+				id.lgr.Error("Failed to create directory in source", "path", path, "error", err)
+				return err
+			}
+			return nil
+		}
+
+		contents, err := fs.ReadFile(sfs, path)
+		if err != nil {
+			id.lgr.Error("Failed to read file from encrypted filesystem", "path", path, "error", err)
+			return err
+		}
+
+		f, err := ofs.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, d.Mode())
+		if err != nil {
+			id.lgr.Error("Failed to create file in source directory", "path", path, "error", err)
+			return err
+		}
+		defer f.Close()
+		if _, err := f.Write(contents); err != nil {
+			id.lgr.Error("Failed to write file to source directory", "path", path, "error", err)
+			return err
+		}
+
+		id.lgr.Debug("File written to source directory", "path", path)
+		return nil
+	})
+
+	if err != nil {
+		id.lgr.Error("Failed to walk encrypted filesystem for ejection", "name", name, "error", err)
+		return err
+	}
+
+	// Remove the encrypted filesystem directory
+	if err := os.RemoveAll(conf.MountPath); err != nil {
+		id.lgr.Error("Failed to remove encrypted filesystem directory", "mountPath", conf.MountPath, "error", err)
+		return err
+	}
+
+	if err := id.SaveMounts(); err != nil {
+		id.lgr.Error("Failed to save mounts during ejecting", "name", name, "error", err)
+		return err
+	}
+
+	return nil
 }

@@ -870,6 +870,17 @@ func (s *MountServer) FSRegisterNewFS(ctxt context.Context, request []byte) ([]b
 		return nil, fmt.Errorf("failed to register new filesystem: %w", err)
 	}
 
+	if req.RemoveOnImport {
+		s.lgr.Debug("Removing source path after import", slog.String("sourcePath", req.SourcePath))
+		if err := os.RemoveAll(req.SourcePath); err != nil {
+			s.lgr.Error("Failed to remove source path after import", slog.String("sourcePath", req.SourcePath), slog.Any("error", err))
+			return nil, err
+		}
+		s.lgr.Info("Removed source path after import", slog.String("sourcePath", req.SourcePath))
+	} else {
+		s.lgr.Debug("Not removing source path after import, flag not specified", slog.String("sourcePath", req.SourcePath))
+	}
+
 	s.lgr.Info("Registered new filesystem successfully", slog.String("path", destPath))
 	return json.Marshal(FSRegisterResponse{Success: true})
 }
@@ -933,6 +944,8 @@ func (s *MountServer) Start() error {
 	s.Server.RegisterHandler("/fs/mount", s.handlerAuthWrapper(s.MountKnownFS))
 	s.Server.RegisterHandler("/fs/delete", s.handlerAuthWrapper(s.FSDeleteKnownMount))
 	s.Server.RegisterHandler("/fs/invalidate", s.handlerAuthWrapper(s.FSInvalidateMount))
+	s.Server.RegisterHandler("/fs/eject", s.handlerAuthWrapper(s.FSEjectKnownMount))
+	s.Server.RegisterHandler("/fs/unmount", s.handlerAuthWrapper(s.FSUnmountKnownMount))
 	s.Server.RegisterHandler("/unlock", s.Authenticate)
 	s.Server.RegisterHandler("/doctor", s.Doctor)
 	s.Server.RegisterHandler("/init", s.Init)
@@ -990,6 +1003,74 @@ func (s *MountServer) FSInvalidateMount(ctxt context.Context, request []byte) ([
 
 	s.lgr.Info("Invalidated known filesystem successfully", slog.String("name", req.Name))
 	return json.Marshal(FSDeleteKnownMountResponse{
+		Success: true,
+	})
+}
+
+type FSKnownMountNameRequest struct {
+	Name string `json:"name"` // Name of the filesystem to be ejected
+}
+
+type FSSuccessResponse struct {
+	Success bool `json:"success"` // Status of the eject operation
+}
+
+func (s *MountServer) FSEjectKnownMount(ctxt context.Context, request []byte) ([]byte, error) {
+	s.lgr.Debug("Received FS eject known mount request")
+	var req FSKnownMountNameRequest
+	if err := json.Unmarshal(request, &req); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal request: %w", err)
+	} else if req.Name == "" {
+		return nil, fmt.Errorf("name must be provided")
+	}
+
+	s.lgr.Debug("Ejecting known filesystem", slog.String("name", req.Name))
+	if err := s.internalData.EjectKnownMount(req.Name); err != nil {
+		s.lgr.Error("Failed to eject known filesystem", slog.String("name", req.Name), slog.Any("error", err))
+		return nil, fmt.Errorf("failed to eject known filesystem %s: %w", req.Name, err)
+	}
+
+	s.lgr.Info("Ejected known filesystem successfully", slog.String("name", req.Name))
+	return json.Marshal(FSSuccessResponse{
+		Success: true,
+	})
+}
+
+type FSUnmountKnownMountRequest struct {
+	Name       string `json:"name"`        // Name of the filesystem to be unmounted
+	MountPoint string `json:"mount_point"` // Path where the filesystem is mounted
+}
+
+func (s *MountServer) FSUnmountKnownMount(ctxt context.Context, request []byte) ([]byte, error) {
+	s.lgr.Debug("Received FS unmount known mount request")
+	var req FSUnmountKnownMountRequest
+	if err := json.Unmarshal(request, &req); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal request: %w", err)
+	} else if req.Name == "" {
+		return nil, fmt.Errorf("name must be provided")
+	}
+
+	s.lgr.Debug("Identifying known filesystem to unmount", slog.String("name", req.Name))
+	var mountListener *MountedListener
+	for _, listener := range s.listeners {
+		if listener.mountPoint == req.MountPoint {
+			mountListener = &listener
+			break
+		}
+	}
+	if mountListener == nil {
+		s.lgr.Error("Failed to find mount listener for known filesystem", slog.String("name", req.Name), slog.String("mountPoint", req.MountPoint))
+		return nil, internaldata.ErrMountNotFound
+	}
+
+	s.lgr.Debug("Unmounting known filesystem", slog.String("name", req.Name), slog.String("mountPoint", req.MountPoint))
+	if err := s.unmountListener(mountListener.listener, mountListener.mountPoint); err != nil {
+		s.lgr.Error("Failed to unmount known filesystem", slog.String("name", req.Name), slog.String("mountPoint", req.MountPoint), slog.Any("error", err))
+		return nil, err
+	}
+
+	s.lgr.Info("Unmounted known filesystem successfully", slog.String("name", req.Name))
+	return json.Marshal(FSSuccessResponse{
 		Success: true,
 	})
 }
