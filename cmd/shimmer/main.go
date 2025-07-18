@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -50,13 +51,16 @@ func getLogger() *slog.Logger {
 }
 
 func handleAuthCliError(resp rpc.DataResponse) {
-	if resp.Error != "" {
-		fmt.Printf("Error: %s\n", resp.Error)
-		if resp.Error == mount.ErrServerIsLocked.Error() {
-			fmt.Println("Shimmer server is currently locked. Please run `shimmer unlock` first.")
-		}
-		os.Exit(1)
+	if resp.Error == "" {
+		return
 	}
+
+	if resp.Error == mount.ErrServerIsLocked.Error() {
+		fmt.Println("Shimmer server is currently locked. Please run `shimmer unlock` first.")
+	} else {
+		fmt.Printf("Error: %s\n", resp.Error)
+	}
+	os.Exit(1)
 }
 
 func newClient(socketPath string, pid int) *rpc.Client {
@@ -99,6 +103,53 @@ func resolvePathToAbsolute(str string) (string, error) {
 		str = cwd + "/" + str
 	}
 	return str, nil
+}
+
+func sendCommand(endpoint string, data interface{}) (*rpc.DataResponse, error) {
+	client := newClient("/tmp/shimmer.sock", os.Getpid())
+	return sendCommandViaClient(client, endpoint, data)
+}
+
+func sendCommandT[T any](endpoint string, data interface{}) (*T, error, error) {
+	client := newClient("/tmp/shimmer.sock", os.Getpid())
+	resp, err := client.Send(endpoint, data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error sending command to server: %w", err)
+	}
+
+	var dResp rpc.DataResponse
+	if err := json.Unmarshal(resp, &dResp); err != nil {
+		return nil, nil, fmt.Errorf("error unmarshalling response: %w", err)
+	}
+
+	handleAuthCliError(dResp)
+
+	if dResp.Error != "" {
+		return nil, errors.New(dResp.Error), nil
+	}
+
+	var result T
+	if err := json.Unmarshal(dResp.Data, &result); err != nil {
+		return nil, nil, err
+	}
+
+	return &result, nil, nil
+}
+
+func sendCommandViaClient(client *rpc.Client, endpoint string, data interface{}) (*rpc.DataResponse, error) {
+	resp, err := client.Send(endpoint, data)
+	if err != nil {
+		return nil, fmt.Errorf("error sending command to server: %w", err)
+	}
+
+	var dResp rpc.DataResponse
+	if err := json.Unmarshal(resp, &dResp); err != nil {
+		return nil, fmt.Errorf("error unmarshalling response: %w", err)
+	}
+
+	handleAuthCliError(dResp)
+
+	return &dResp, nil
 }
 
 func main() {
@@ -325,7 +376,7 @@ func main() {
 		},
 	})
 
-	cmd := &cobra.Command{
+	mountsCmd := &cobra.Command{
 		Use:   "mounts",
 		Short: "Jump into the mounts subcommand",
 		Long:  `This command allows you to manage mounts in the shimmer server.`,
@@ -335,7 +386,7 @@ func main() {
 			os.Exit(0)
 		},
 	}
-	cmd.AddCommand(&cobra.Command{
+	mountsCmd.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List all mounts",
 		Run: func(cmd *cobra.Command, args []string) {
@@ -365,12 +416,166 @@ func main() {
 			}
 			fmt.Println("Known mounts:")
 			for _, m := range mounts.Mounts {
-				fmt.Printf("Mount Point: %s, Source: %s, Enc Key ID: %s,\n",
-					m.MountPath, m.SourceDir, m.EncryptionKeyID)
+				fmt.Println(m.Name, "->", m.MountPath)
 			}
 		},
 	})
-	rootCmd.AddCommand(cmd)
+	rootCmd.AddCommand(mountsCmd)
+
+	fsCmd := &cobra.Command{
+		Use:   "fs",
+		Short: "Jump into the fs subcommand",
+		Long:  `This command allows you to manage filesystems in the shimmer server.`,
+	}
+
+	fsRegisterCmd := &cobra.Command{
+		Use:   "register",
+		Short: "Register a new filesystem",
+		Run: func(cmd *cobra.Command, args []string) {
+			name, _ := cmd.Flags().GetString("name")
+			src, _ := cmd.Flags().GetString("src")
+			removeOnImport, _ := cmd.Flags().GetBool("remove-on-import")
+			if len(name) == 0 || len(src) == 0 {
+				fmt.Println("Usage: shimmer fs register --name <name> --src <source_path> [--remove-on-import]")
+				os.Exit(1)
+			}
+
+			// Process server will need to implement:
+			path, err := resolvePathToAbsolute(src)
+			if err != nil {
+				fmt.Printf("Error resolving source path: %v\n", err)
+				os.Exit(1)
+			}
+
+			resp, err := sendCommand("/fs/register", mount.FSRegisterRequest{
+				Name:           name,
+				SourcePath:     path,
+				RemoveOnImport: removeOnImport,
+			})
+			if err != nil {
+				fmt.Printf("Error registering filesystem: %v\n", err)
+				os.Exit(1)
+			}
+
+			var dResp mount.FSRegisterResponse
+			if err := json.Unmarshal(resp.Data, &dResp); err != nil {
+				fmt.Printf("Error unmarshalling response: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Println("Mounted filesystem successfully:", dResp.Success)
+		},
+	}
+	fsRegisterCmd.Flags().String("name", "", "Name to register the filesystem with")
+	fsRegisterCmd.Flags().String("src", "", "Source of path to register")
+	fsRegisterCmd.Flags().Bool("remove-on-import", false, "Remove the source path after import")
+
+	fsCmd.AddCommand(fsRegisterCmd)
+
+	fsMountCmd := &cobra.Command{
+		Use:   "mount",
+		Short: "Mount a registered filesystem",
+		Run: func(cmd *cobra.Command, args []string) {
+			name, _ := cmd.Flags().GetString("name")
+			if len(name) == 0 {
+				fmt.Println("Usage: shimmer fs mount --name <name> --mount <mount_point>")
+				os.Exit(1)
+			}
+			mountPoint, _ := cmd.Flags().GetString("mount")
+			if len(mountPoint) == 0 {
+				fmt.Println("Usage: shimmer fs mount --name <name> --mount <mount_point>")
+				os.Exit(1)
+			}
+			resp, err := sendCommand("/fs/mount", mount.FSMountKnownFSRequest{
+				Name:       name,
+				MountPoint: mountPoint,
+			})
+			if err != nil {
+				fmt.Printf("Error mounting filesystem: %v\n", err)
+				os.Exit(1)
+			} else if resp.Error != "" {
+				fmt.Printf("Error mounting filesystem: %s\n", resp.Error)
+				os.Exit(1)
+			}
+
+			var result mount.FSMountKnownFSResponse
+			if err := json.Unmarshal(resp.Data, &result); err != nil {
+				fmt.Printf("Error unmarshalling response: %v\n", err)
+				os.Exit(1)
+			}
+
+			if !result.Success {
+				fmt.Println("Failed to mount filesystem")
+				os.Exit(1)
+			}
+
+			fmt.Printf("Mounted filesystem '%s' at '%s' successfully.\n", name, mountPoint)
+		},
+	}
+	fsMountCmd.Flags().String("name", "", "Name of the filesystem to mount")
+	fsMountCmd.Flags().String("mount", "", "Mount point to mount the filesystem at")
+	fsCmd.AddCommand(fsMountCmd)
+
+	fsInvalidateCmd := &cobra.Command{
+		Use:   "invalidate",
+		Short: "Invalidate a registered filesystem",
+		Run: func(cmd *cobra.Command, args []string) {
+			name, _ := cmd.Flags().GetString("name")
+			if len(name) == 0 {
+				fmt.Println("Usage: shimmer fs invalidate --name <name>")
+				os.Exit(1)
+			}
+			resp, srvrErr, err := sendCommandT[mount.FSDeleteKnownMountResponse]("/fs/invalidate", mount.FSDeleteKnownMountRequest{
+				Name: name,
+			})
+
+			if err != nil {
+				fmt.Printf("Error invalidating filesystem: %v\n", err)
+				os.Exit(1)
+			} else if srvrErr != nil {
+				fmt.Printf("Server error invalidating filesystem: %v\n", srvrErr)
+				os.Exit(1)
+			} else if resp == nil {
+				fmt.Println("No response received from server.")
+				os.Exit(1)
+			}
+
+			fmt.Println("Invalidated filesystem successfully:", resp.Success)
+		},
+	}
+	fsInvalidateCmd.Flags().String("name", "", "Name of the filesystem to invalidate")
+	fsCmd.AddCommand(fsInvalidateCmd)
+
+	fsDeleteCmd := &cobra.Command{
+		Use:   "delete",
+		Short: "Delete a registered filesystem",
+		Run: func(cmd *cobra.Command, args []string) {
+			name, _ := cmd.Flags().GetString("name")
+			if len(name) == 0 {
+				fmt.Println("Usage: shimmer fs delete --name <name>")
+				os.Exit(1)
+			}
+			resp, srvrErr, err := sendCommandT[mount.FSDeleteKnownMountResponse]("/fs/delete", mount.FSDeleteKnownMountRequest{
+				Name: name,
+			})
+			if err != nil {
+				fmt.Printf("Error deleting filesystem: %v\n", err)
+				os.Exit(1)
+			} else if srvrErr != nil {
+				fmt.Printf("Server error deleting filesystem: %v\n", srvrErr)
+				os.Exit(1)
+			} else if resp == nil {
+				fmt.Println("No response received from server.")
+				os.Exit(1)
+			}
+
+			fmt.Println("Deleted filesystem successfully:", resp.Success)
+		},
+	}
+	fsDeleteCmd.Flags().String("name", "", "Name of the filesystem to delete")
+	fsCmd.AddCommand(fsDeleteCmd)
+
+	rootCmd.AddCommand(fsCmd)
 
 	// Add root level flag for seting the log level
 	rootCmd.PersistentFlags().String("log-level", "info", "Set the log level (debug, info, warn, error)")
