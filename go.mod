@@ -17,6 +17,7 @@ require (
 )
 
 require (
+	github.com/NovaCove/grainfs v1.0.0 // indirect
 	github.com/ansxuman/go-touchid v0.0.0-20241021115423-60941306d4c3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cyphar/filepath-securejoin v0.4.1 // indirect

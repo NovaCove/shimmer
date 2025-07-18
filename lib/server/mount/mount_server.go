@@ -27,6 +27,7 @@ import (
 	"github.com/NovaCove/shimmer/lib/server/rpc"
 	"github.com/NovaCove/shimmer/lib/server/secure/internaldata"
 	"github.com/NovaCove/shimmer/lib/server/secure/keymanagement"
+	"github.com/NovaCove/shimmer/lib/server/secure/transform"
 )
 
 type MountedListener struct {
@@ -175,6 +176,8 @@ func (s *MountServer) initializeInternalData() error {
 	s.lgr.Debug("Loading internal data storage")
 	if err := s.internalData.Load(); err != nil {
 		return fmt.Errorf("failed to load internal data: %w", err)
+	} else if _, err := s.internalData.LoadMounts(); err != nil {
+		return fmt.Errorf("failed to load mounts from internal data: %w", err)
 	}
 
 	s.lgr.Info("Internal data storage initialized successfully")
@@ -254,6 +257,45 @@ func (s *MountServer) IsPIDAuthenticatedHandler(ctxt context.Context, request []
 type ContextualFS struct {
 	billy.Filesystem
 	lgr *slog.Logger
+}
+
+func (c ContextualFS) Open(filename string) (billy.File, error) {
+	c.lgr.Info("Opening file", slog.String("filename", filename))
+	// Here we could add context-specific logic, e.g., logging, user info, etc.
+	// For now, we just log the filename.
+	file, err := c.Filesystem.Open(filename)
+	if err != nil {
+		c.lgr.Error("Failed to open file", slog.String("filename", filename), slog.Any("error", err))
+		return nil, err
+	}
+	c.lgr.Info("File opened successfully", slog.String("filename", filename))
+	return file, nil
+}
+
+func (c ContextualFS) ReadDir(dirname string) ([]os.FileInfo, error) {
+	c.lgr.Info("Reading directory", slog.String("dirname", dirname))
+	// Here we could add context-specific logic, e.g., logging, user info, etc.
+	// For now, we just log the directory name.
+	files, err := c.Filesystem.ReadDir(dirname)
+	if err != nil {
+		c.lgr.Error("Failed to read directory", slog.String("dirname", dirname), slog.Any("error", err))
+		return nil, err
+	}
+	c.lgr.Info("Directory read successfully", slog.String("dirname", dirname), slog.Int("fileCount", len(files)))
+	return files, nil
+}
+
+func (c ContextualFS) Stat(filename string) (os.FileInfo, error) {
+	c.lgr.Info("Statting file", slog.String("filename", filename))
+	// Here we could add context-specific logic, e.g., logging, user info, etc.
+	// For now, we just log the filename.
+	fileInfo, err := c.Filesystem.Stat(filename)
+	if err != nil {
+		c.lgr.Error("Failed to stat file", slog.String("filename", filename), slog.Any("error", err))
+		return nil, err
+	}
+	c.lgr.Info("File statted successfully", slog.String("filename", filename), slog.Any("fileInfo", fileInfo))
+	return fileInfo, nil
 }
 
 // func (cfs *ContextualFS) OpenWithContext(ctx context.Context, filename string) (billy.File, error) {
@@ -351,6 +393,81 @@ func (s *MountServer) mountListener(path, mountPoint string, port int, cacheAsLi
 	return nil
 }
 
+// DIDNTDO(ttacon): this is a duplicate of the above function, refactor to combine via billy.FS param.
+func (s *MountServer) mountListenerFromBillyFS(name string, gbfs billy.Filesystem, mountPoint string, port int, cacheAsListener bool, ttl string) error {
+	s.lgr.Info("Mounting path", slog.String("mountPath", mountPoint))
+	if mountPoint == "" {
+		return fmt.Errorf("path and mount_point must be provided")
+	}
+
+	bfs := ContextualFS{gbfs, s.lgr}
+	handler := nfshelper.NewNullAuthHandler(bfs)
+	cacheHelper := nfshelper.NewCachingHandler(handler, 1024)
+
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return fmt.Errorf("failed to listen on port %d: %w", port, err)
+	}
+
+	s.lgr.Info("Mount server running at", slog.Any("addr", listener.Addr()))
+	go func() {
+		if err := nfs.Serve(listener, cacheHelper); err != nil {
+			s.lgr.Error("Error serving NFS", slog.Any("err", err))
+			return
+		}
+	}()
+
+	// Now run the os exec command to mount the NFS share
+	s.lgr.Debug("Mounting NFS share at", slog.String("mountPath", mountPoint))
+	if err := os.MkdirAll(mountPoint, 0755); err != nil {
+		return fmt.Errorf("failed to create mount point %s: %w", mountPoint, err)
+	}
+
+	s.lgr.Debug("Setting permissions on mount point", slog.String("mountPath", mountPoint))
+	if err := os.Chmod(mountPoint, 0755); err != nil {
+		return fmt.Errorf("failed to set permissions on mount point %s: %w", mountPoint, err)
+	}
+
+	s.lgr.Debug(
+		"Mounting NFS share from",
+		slog.String("mountPath", mountPoint),
+	)
+	// NOTE(ttacon): why was the destPath used here before? Where we bypassing the NFS server somehow?
+	destPath := gbfs.Root() // Get the root of the billy filesystem
+	s.lgr.Debug("Mounting NFS share from billy filesystem root", slog.String("destPath", destPath))
+	cmd := exec.Command("mount", "-o", fmt.Sprintf("port=%d,mountport=%d", port, port), "-t", "nfs", fmt.Sprintf("localhost:%s", name), mountPoint)
+	if err := cmd.Run(); err != nil {
+		s.lgr.Error("Failed to mount NFS share:", slog.Any("mount error", err))
+		return fmt.Errorf("failed to mount NFS share: %w", err)
+	}
+
+	s.lgr.Info("Mounted NFS share successfully at", slog.String("mountPath", mountPoint))
+	if cacheAsListener {
+		s.listeners = append(s.listeners, struct {
+			listener   net.Listener
+			mountPoint string
+		}{
+			listener:   listener,
+			mountPoint: mountPoint,
+		})
+
+		go func() {
+			// Keep the listener alive for the specified TTL
+			if len(ttl) > 0 {
+				dur, err := time.ParseDuration(ttl)
+				if err != nil {
+					return
+				}
+				time.Sleep(dur)
+				s.lgr.Info("Stopping listener after TTL", slog.String("ttl", ttl))
+				s.unmountListener(listener, mountPoint)
+			}
+		}()
+	}
+
+	return nil
+}
+
 var ErrServerIsLocked = fmt.Errorf("server is locked, please authenticate first")
 
 func (s *MountServer) StartMountHandler(ctxt context.Context, request []byte) ([]byte, error) {
@@ -405,17 +522,20 @@ func homeShimmerDir() (string, error) {
 var internalDataDirName = "internaldata"
 
 func internalDataDirPath() (string, error) {
+	return shimmerInternalPath(internalDataDirName)
+}
+
+func shimmerInternalPath(finalSegment string) (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
-	// Create the internal data directory if it doesn't exist
-	internalDataDir := filepath.Join(homeDir, shimmerDir, internalDataDirName)
-	if err := os.MkdirAll(internalDataDir, 0755); err != nil {
+	destDir := filepath.Join(homeDir, shimmerDir, finalSegment)
+	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return "", err
 	}
-	return internalDataDir, nil
+	return destDir, nil
 }
 
 func (s *MountServer) StartSingleMountFileHandler(ctxt context.Context, request []byte) ([]byte, error) {
@@ -696,11 +816,123 @@ func (s *MountServer) ListKnownMounts(ctxt context.Context, request []byte) ([]b
 	return data, nil
 }
 
+type FSRegisterRequest struct {
+	Name           string `json:"name"`             // Name of the filesystem to be registered
+	SourcePath     string `json:"source_path"`      // Path to the filesystem to be registered
+	RemoveOnImport bool   `json:"remove_on_import"` // Whether to remove the filesystem on import
+}
+
+type FSRegisterResponse struct {
+	Success bool `json:"success"`
+}
+
+var ShimmerDataDir = "fs-data"
+
+func (s *MountServer) FSRegisterNewFS(ctxt context.Context, request []byte) ([]byte, error) {
+	s.lgr.Debug("Received FS register request")
+	var req FSRegisterRequest
+	if err := json.Unmarshal(request, &req); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal request: %w", err)
+	} else if req.SourcePath == "" {
+		return nil, fmt.Errorf("path must be provided")
+	}
+
+	shimmerInteralDestPath, err := shimmerInternalPath(ShimmerDataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get shimmer data directory: %w", err)
+	}
+
+	destPath := filepath.Join(shimmerInteralDestPath, req.Name)
+	s.lgr.Debug("Registering new filesystem", slog.String("path", req.SourcePath), slog.String("destPath", destPath))
+	ingstr := transform.NewIngestor(
+		req.Name,
+		req.SourcePath,
+		destPath,
+		s.internalData,
+		s.skm,
+		s.lgr,
+	)
+
+	s.lgr.Debug("Initializing ingestor for new filesystem")
+	if err := ingstr.Init(); err != nil {
+		s.lgr.Error("Failed to initialize ingestor for new filesystem", slog.String("path", req.SourcePath), slog.Any("error", err))
+		return nil, err
+	}
+
+	s.lgr.Debug(
+		"Ingesting new filesystem",
+		slog.String("name", req.Name),
+		slog.String("sourcePath", req.SourcePath),
+		slog.String("destPath", destPath),
+	)
+	if err := ingstr.Ingest(); err != nil {
+		s.lgr.Error("Failed to register new filesystem", slog.String("path", req.SourcePath), slog.Any("error", err))
+		return nil, fmt.Errorf("failed to register new filesystem: %w", err)
+	}
+
+	s.lgr.Info("Registered new filesystem successfully", slog.String("path", destPath))
+	return json.Marshal(FSRegisterResponse{Success: true})
+}
+
+type FSMountKnownFSRequest struct {
+	Name       string `json:"name"`        // Name of the filesystem to be mounted
+	MountPoint string `json:"mount_point"` // Path where the filesystem should be mounted
+}
+
+func (s *MountServer) MountKnownFS(ctxt context.Context, request []byte) ([]byte, error) {
+	s.lgr.Debug("Received mount known FS request")
+	var req FSMountKnownFSRequest
+	if err := json.Unmarshal(request, &req); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal request: %w", err)
+	} else if req.Name == "" || req.MountPoint == "" {
+		return nil, fmt.Errorf("name and mount_point must be provided")
+	}
+
+	shimmerInteralDestPath, err := shimmerInternalPath(ShimmerDataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get shimmer data directory: %w", err)
+	}
+	sourcePath := filepath.Join(shimmerInteralDestPath, req.Name)
+	s.lgr.Debug("Mounting known filesystem", slog.String("name", req.Name), slog.String("sourcePath", sourcePath), slog.String("mountPoint", req.MountPoint))
+	if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("filesystem %s does not exist at %s", req.Name, sourcePath)
+	}
+
+	efs, err := s.internalData.RetrieveMountByName(req.Name)
+	if err != nil {
+		s.lgr.Error("Failed to retrieve mount by name", slog.String("name", req.Name), slog.Any("error", err))
+		return nil, err
+	} else if efs == nil {
+		return nil, fmt.Errorf("filesystem %s not found in internal data", req.Name)
+	}
+
+	if err := s.mountListenerFromBillyFS(sourcePath, efs, req.MountPoint, randomPort(), true, ""); err != nil {
+		s.lgr.Error("Failed to mount known filesystem", slog.String("name", req.Name), slog.String("mountPoint", req.MountPoint), slog.Any("error", err))
+		return nil, fmt.Errorf("failed to mount known filesystem %s: %w", req.Name, err)
+	}
+	s.lgr.Info("Mounted known filesystem successfully", slog.String("name", req.Name), slog.String("mountPoint", req.MountPoint))
+	return json.Marshal(FSMountKnownFSResponse{
+		MountPoint: req.MountPoint,
+		SourcePath: sourcePath,
+		Success:    true,
+	})
+}
+
+type FSMountKnownFSResponse struct {
+	MountPoint string `json:"mount_point"` // Path where the filesystem is mounted
+	SourcePath string `json:"source_path"` // Path to the source filesystem
+	Success    bool   `json:"status"`      // Status of the mount operation
+}
+
 func (s *MountServer) Start() error {
 	s.Server.RegisterHandler("/auth/check", s.handlerAuthWrapper(s.IsPIDAuthenticatedHandler))
 	s.Server.RegisterHandler("/mount/start", s.handlerAuthWrapper(s.StartMountHandler))
 	s.Server.RegisterHandler("/mount/single", s.handlerAuthWrapper(s.StartSingleMountFileHandler))
 	s.Server.RegisterHandler("/mount/list", s.handlerAuthWrapper(s.ListKnownMounts))
+	s.Server.RegisterHandler("/fs/register", s.handlerAuthWrapper(s.FSRegisterNewFS))
+	s.Server.RegisterHandler("/fs/mount", s.handlerAuthWrapper(s.MountKnownFS))
+	s.Server.RegisterHandler("/fs/delete", s.handlerAuthWrapper(s.FSDeleteKnownMount))
+	s.Server.RegisterHandler("/fs/invalidate", s.handlerAuthWrapper(s.FSInvalidateMount))
 	s.Server.RegisterHandler("/unlock", s.Authenticate)
 	s.Server.RegisterHandler("/doctor", s.Doctor)
 	s.Server.RegisterHandler("/init", s.Init)
@@ -710,6 +942,56 @@ func (s *MountServer) Start() error {
 	}
 	s.lgr.Info("Mount server running at %s\n", slog.String("unixSocketPath", s.Server.UnixSocket))
 	return nil
+}
+
+type FSDeleteKnownMountRequest struct {
+	Name string `json:"name"` // Name of the filesystem to be deleted
+}
+
+type FSDeleteKnownMountResponse struct {
+	Success bool `json:"success"` // Status of the delete operation
+}
+
+func (s *MountServer) FSDeleteKnownMount(ctxt context.Context, request []byte) ([]byte, error) {
+	s.lgr.Debug("Received FS delete known mount request")
+	var req FSDeleteKnownMountRequest
+	if err := json.Unmarshal(request, &req); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal request: %w", err)
+	} else if req.Name == "" {
+		return nil, fmt.Errorf("name must be provided")
+	}
+
+	s.lgr.Debug("Deleting known filesystem", slog.String("name", req.Name))
+	if err := s.internalData.DeleteMountByName(req.Name); err != nil {
+		s.lgr.Error("Failed to delete known filesystem", slog.String("name", req.Name), slog.Any("error", err))
+		return nil, fmt.Errorf("failed to delete known filesystem %s: %w", req.Name, err)
+	}
+
+	s.lgr.Info("Deleted known filesystem successfully", slog.String("name", req.Name))
+	return json.Marshal(FSDeleteKnownMountResponse{
+		Success: true,
+	})
+}
+
+func (s *MountServer) FSInvalidateMount(ctxt context.Context, request []byte) ([]byte, error) {
+	s.lgr.Debug("Received FS invalidate mount request")
+	var req FSDeleteKnownMountRequest
+	if err := json.Unmarshal(request, &req); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal request: %w", err)
+	} else if req.Name == "" {
+		return nil, fmt.Errorf("name must be provided")
+	}
+
+	s.lgr.Debug("Invalidating known filesystem", slog.String("name", req.Name))
+	if err := s.internalData.InvalidateMount(req.Name); err != nil {
+		s.lgr.Error("Failed to invalidate known filesystem", slog.String("name", req.Name), slog.Any("error", err))
+		return nil, fmt.Errorf("failed to invalidate known filesystem %s: %w", req.Name, err)
+	}
+
+	s.lgr.Info("Invalidated known filesystem successfully", slog.String("name", req.Name))
+	return json.Marshal(FSDeleteKnownMountResponse{
+		Success: true,
+	})
 }
 
 func (s *MountServer) unmountSingleFile(l net.Listener, mountPath, linkedFileLoc string) error {

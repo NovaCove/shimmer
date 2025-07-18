@@ -27,6 +27,7 @@ type VFNode struct {
 }
 
 type MountConfig struct {
+	Name            string `json:"name"`
 	MountPath       string `json:"mount_path"`
 	SourceDir       VFNode `json:"source_dir"`
 	EncryptionKeyID string `json:"encryption_key_id"`

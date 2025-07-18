@@ -313,6 +313,21 @@ func (fs *EncryptedFS) Create(filename string) (billy.File, error) {
 	}, nil
 }
 
+func (fs *EncryptedFS) WriteFile(filename string, data []byte, perm os.FileMode) error {
+	f, err := fs.Create(filename)
+	if err != nil {
+		return err
+	}
+
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (fs *EncryptedFS) Open(filename string) (billy.File, error) {
 	encName := fs.encryptedFileName(filename)
 	file, err := fs.underlying.Open(encName)

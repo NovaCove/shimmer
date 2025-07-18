@@ -6,14 +6,16 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
+	"github.com/NovaCove/grainfs"
 	"github.com/NovaCove/shimmer/lib/logger"
 	"github.com/NovaCove/shimmer/lib/server/config"
-	"github.com/NovaCove/shimmer/lib/server/secure/encryptedfs"
 	"github.com/NovaCove/shimmer/lib/server/secure/keymanagement"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/go-git/go-billy/v5"
+	"github.com/go-git/go-billy/v5/osfs"
 )
 
 type InternalData interface {
@@ -24,6 +26,14 @@ type InternalData interface {
 
 	NumMounts() int
 	Bootstrap() error
+
+	AddMount(mount config.MountConfig) error
+	AddSingleFileMount(mount config.MountSingleConfig) error
+	SaveMounts() error
+
+	RetrieveMountByName(name string) (billy.Filesystem, error)
+	DeleteMountByName(name string) error
+	InvalidateMount(name string) error
 }
 
 type internalData struct {
@@ -32,6 +42,9 @@ type internalData struct {
 	db            *badger.DB
 
 	mounts *config.DataConfig
+
+	isLoaded     bool
+	isLoadedLock *sync.RWMutex
 
 	lgr *slog.Logger
 	skm *keymanagement.SecureKeychainManager
@@ -44,6 +57,8 @@ func NewInternalData(dataPath string, encryptionKey []byte, lgr *slog.Logger, sk
 
 		lgr: lgr,
 		skm: skm,
+
+		isLoadedLock: new(sync.RWMutex),
 	}
 }
 
@@ -104,6 +119,10 @@ func (id *internalData) Load() error {
 		return err
 	}
 
+	id.isLoadedLock.Lock()
+	id.isLoaded = true
+	id.isLoadedLock.Unlock()
+
 	return nil
 }
 
@@ -131,10 +150,66 @@ func (id *internalData) LoadMounts() (*config.DataConfig, error) {
 		}
 		return nil, err
 	}
+	id.lgr.Debug("Loaded mounts from database", "mounts", mounts)
 
 	id.mounts = &mounts
 
 	return &mounts, nil
+}
+
+func (id *internalData) isMountsLoaded() bool {
+	id.isLoadedLock.RLock()
+	defer id.isLoadedLock.RUnlock()
+	if !id.isLoaded {
+		return false
+	}
+
+	if id.mounts == nil {
+		id.mounts = &config.DataConfig{
+			Mounts:      []config.MountConfig{},
+			SingleFiles: []config.MountSingleConfig{},
+		}
+	}
+	return true
+}
+
+func (id *internalData) SaveMounts() error {
+	if !id.isMountsLoaded() {
+		return errors.New("mounts are not loaded")
+	}
+
+	data, err := json.Marshal(id.mounts)
+	if err != nil {
+		return err
+	}
+
+	return id.db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte("mounts"), data)
+	})
+}
+
+func (id *internalData) AddMount(mount config.MountConfig) error {
+	if !id.isMountsLoaded() {
+		return errors.New("mounts are not loaded")
+	}
+
+	// Add the mount to the mounts config
+	id.mounts.Mounts = append(id.mounts.Mounts, mount)
+
+	// Save the updated mounts config
+	return id.SaveMounts()
+}
+
+func (id *internalData) AddSingleFileMount(mount config.MountSingleConfig) error {
+	if !id.isMountsLoaded() {
+		return errors.New("mounts are not loaded")
+	}
+
+	// Add the single file mount to the mounts config
+	id.mounts.SingleFiles = append(id.mounts.SingleFiles, mount)
+
+	// Save the updated mounts config
+	return id.SaveMounts()
 }
 
 func (id *internalData) DecryptMount(mount *config.MountConfig) (billy.Filesystem, error) {
@@ -145,13 +220,17 @@ func (id *internalData) DecryptMount(mount *config.MountConfig) (billy.Filesyste
 	}
 
 	// Load the key from the keychain
-	key, err := id.skm.RetrieveToken("password", keyID)
+	key, err := id.skm.RetrieveEncryptionKey(keyID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Decrypt the mount data
-	fs, err := encryptedfs.New(key, mount.MountPath)
+	id.lgr.Debug("Decrypting mount", "name", mount.Name, "sourceDir", mount.SourceDir.Path, "keyID", key, "mountPath", mount.MountPath)
+	fs, err := grainfs.New(
+		osfs.New(mount.MountPath),
+		key,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -161,4 +240,101 @@ func (id *internalData) DecryptMount(mount *config.MountConfig) (billy.Filesyste
 
 func (id *internalData) NumMounts() int {
 	return len(id.mounts.Mounts) + len(id.mounts.SingleFiles)
+}
+
+var ErrMountNotFound = errors.New("mount not found")
+
+func (id *internalData) RetrieveMountByName(name string) (billy.Filesystem, error) {
+	if id.mounts == nil {
+		return nil, errors.New("mounts are not loaded")
+	}
+
+	for _, mount := range id.mounts.Mounts {
+		if mount.Name == name {
+			return id.DecryptMount(&mount)
+		}
+	}
+
+	for _, singleFile := range id.mounts.SingleFiles {
+		if singleFile.Name == name {
+			return id.DecryptMount(&singleFile.MountConfig)
+		}
+	}
+
+	return nil, ErrMountNotFound
+}
+
+func (id *internalData) getMountConfigByName(name string) (*config.MountConfig, error) {
+	if id.mounts == nil {
+		return nil, errors.New("mounts are not loaded")
+	}
+
+	for _, mount := range id.mounts.Mounts {
+		if mount.Name == name {
+			return &mount, nil
+		}
+	}
+
+	for _, singleFile := range id.mounts.SingleFiles {
+		if singleFile.Name == name {
+			return &singleFile.MountConfig, nil
+		}
+	}
+
+	return nil, ErrMountNotFound
+}
+
+func (id *internalData) DeleteMountByName(name string) error {
+	if id.mounts == nil {
+		return errors.New("mounts are not loaded")
+	}
+
+	mntCfg, err := id.getMountConfigByName(name)
+	if err != nil {
+		return err
+	}
+
+	// Remove the mount from the filesystem
+	if err := os.RemoveAll(mntCfg.MountPath); err != nil {
+		id.lgr.Error("Failed to remove mount source directory", "name", name, "error", err)
+		return err
+	}
+
+	for i, mount := range id.mounts.Mounts {
+		if mount.Name == name {
+			id.mounts.Mounts = append(id.mounts.Mounts[:i], id.mounts.Mounts[i+1:]...)
+			return id.SaveMounts()
+		}
+	}
+
+	for i, singleFile := range id.mounts.SingleFiles {
+		if singleFile.Name == name {
+			id.mounts.SingleFiles = append(id.mounts.SingleFiles[:i], id.mounts.SingleFiles[i+1:]...)
+			return id.SaveMounts()
+		}
+	}
+
+	return ErrMountNotFound
+}
+
+func (id *internalData) InvalidateMount(name string) error {
+	if id.mounts == nil {
+		return errors.New("mounts are not loaded")
+	}
+
+	for i, mount := range id.mounts.Mounts {
+		if mount.Name == name {
+			id.mounts.Mounts = append(id.mounts.Mounts[:i], id.mounts.Mounts[i+1:]...)
+			return id.SaveMounts()
+		}
+	}
+
+	for i, singleFile := range id.mounts.SingleFiles {
+		if singleFile.Name == name {
+			id.mounts.SingleFiles = append(id.mounts.SingleFiles[:i], id.mounts.SingleFiles[i+1:]...)
+			return id.SaveMounts()
+		}
+	}
+
+	return ErrMountNotFound
 }

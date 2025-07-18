@@ -55,13 +55,32 @@ The config should contain information such as:
  - [x] diagnostics command
  - [ ] implement storage for encrypted blobs
  - [ ] implement sqlite db or something similar for access history
- - [ ] log truncation
+   - should be able to use methods wrapping `ContextualFS` to implement access logging
  - [x] share key management in keychain, with rotation based on some value
  - [ ] data config management - loading, showing, editing
  - [ ] initial file import, with safeguards
+   - should be something like `shimmer fs register <name> <location> --remove-on-import=false`
  - [ ] better onboarding UX - e.g. some nice colored "shimmer bootstrap" command
  - [ ] Actually harden the rpc protocol - magic cookies, multiplexing, connection lifecycle, etc
+ - [ ] log truncation
 
  ## Future improvements
   - Only use one NFS server, so that we don't need one per mount
   - Fork the go-nfs server to pass user and process information to the server, currently this information is lost.
+
+# Understanding shimmer
+
+## Filesystem mounts
+
+First, a filesystem mount must be registered with the shimmer daemon. This will cause it to ingest and encrypt the entire directory structure. This FS can then be mounted at any other point. Usage would look like:
+
+```sh
+# Ingest the directory for testing purpsoes
+shimmer fs register gcloud-dotfiles ~/.gcloud --remove-on-import=false
+
+# Now we can mount it - we'll name it "gcloud"
+shimmer fs mount gcloud --fs=gcloud-dotfiles --mountpoint=~/.gcloud2 --ttl=8h
+
+# If you log in the next day, you'll need to re-activate it.
+shimmer fs activate gcloud
+```
