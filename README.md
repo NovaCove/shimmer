@@ -1,11 +1,52 @@
 shimmer
 -----
 
-The goal of this project is to provide a solution to directory based file accesses (one day we'll come for you, too, single files).
+**WARNING: THIS IS NOT STABLE - USE AT YOUR OWN RISK**
 
-Currently, there is a server and client component. Longer term, we'll have the server load from boot, get it's authentication keys from the keychain, and then be off the the races.
+The goal of this project is to provide a simple, transparent way to encrypt filesystems in a manner that allows authenticated processes to access them as if they were plaintext.
 
-Today, we have a skeleton.
+Why? Because so many tools rely on known file locations for plaintext files, `~/.npmrc`, `~/.aws/credentials`, and on and on.
+
+The goal with `shimmer`, is to allow authenticated process trees to access these files as normal, while they don't seem to exist to non-authenticated processes... perhaps `mirage` would have been a better name.
+
+# Milestones
+ 1. [ ] Functional prototype that supports TTLs per mount, but does not enforce per-process authentication
+ 2. [ ] Support per-process authentication
+ 3. [ ] Support retrieval and syncing of remote encrypted filesystems
+
+
+## Proof it works
+Follow these instructions:
+
+In one terminal session:
+```sh
+make dev
+./shimmer server
+```
+
+In a second terminal session:
+```sh
+# Add the directory to shimmer, note that this will delete it from where it originally was.
+./shimmer fs register --name=example-demo --src=./example/demo --remove-on-import=true
+
+# Check that it's gone, oh my!
+ls ./example/demo
+
+# Mount the directory to a new place to show that we can.
+./shimmer fs mount --name example-demo --mount ./example/demo-new 
+
+# Checking the new directory out.
+tree ./example/demo-new
+
+# Unmount the directory
+./shimmer fs unmount --name example-demo --mount ./example/demo-new
+
+# Eject the encrypted filesystem back to whence it came.
+./shimmer fs eject --name example-demo
+
+# Proving that it's back to how it was.
+tree ./example/demo
+```
 
 # Getting Started
 
@@ -15,6 +56,9 @@ brew install shimmer
 ```
 
 ## Initial boostrap
+```
+shimmer bootstrap
+```
 
 
 
@@ -27,6 +71,8 @@ brew install shimmer
 
 
 ## Config
+(honestly this isn't really used yet, but is idealistic)
+
 The config should contain information such as:
 
  - directory structures and links to file content, and whether it is read-only or read/write

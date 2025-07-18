@@ -136,6 +136,21 @@ func sendCommandT[T any](endpoint string, data interface{}) (*T, error, error) {
 	return &result, nil, nil
 }
 
+func porcelainSendCommandT[T any](endpoint string, data interface{}) *T {
+	resp, srvrErr, err := sendCommandT[T](endpoint, data)
+	if err != nil {
+		fmt.Printf("shimmer communication error: %v\n", err)
+		os.Exit(1)
+	} else if srvrErr != nil {
+		fmt.Printf("Server error: %v\n", srvrErr)
+		os.Exit(1)
+	} else if resp == nil {
+		fmt.Println("No response received from server.")
+		os.Exit(1)
+	}
+	return resp
+}
+
 func sendCommandViaClient(client *rpc.Client, endpoint string, data interface{}) (*rpc.DataResponse, error) {
 	resp, err := client.Send(endpoint, data)
 	if err != nil {
@@ -525,20 +540,9 @@ func main() {
 				fmt.Println("Usage: shimmer fs invalidate --name <name>")
 				os.Exit(1)
 			}
-			resp, srvrErr, err := sendCommandT[mount.FSDeleteKnownMountResponse]("/fs/invalidate", mount.FSDeleteKnownMountRequest{
+			resp := porcelainSendCommandT[mount.FSDeleteKnownMountResponse]("/fs/invalidate", mount.FSDeleteKnownMountRequest{
 				Name: name,
 			})
-
-			if err != nil {
-				fmt.Printf("Error invalidating filesystem: %v\n", err)
-				os.Exit(1)
-			} else if srvrErr != nil {
-				fmt.Printf("Server error invalidating filesystem: %v\n", srvrErr)
-				os.Exit(1)
-			} else if resp == nil {
-				fmt.Println("No response received from server.")
-				os.Exit(1)
-			}
 
 			fmt.Println("Invalidated filesystem successfully:", resp.Success)
 		},
@@ -555,25 +559,62 @@ func main() {
 				fmt.Println("Usage: shimmer fs delete --name <name>")
 				os.Exit(1)
 			}
-			resp, srvrErr, err := sendCommandT[mount.FSDeleteKnownMountResponse]("/fs/delete", mount.FSDeleteKnownMountRequest{
+			resp := porcelainSendCommandT[mount.FSDeleteKnownMountResponse]("/fs/delete", mount.FSDeleteKnownMountRequest{
 				Name: name,
 			})
-			if err != nil {
-				fmt.Printf("Error deleting filesystem: %v\n", err)
-				os.Exit(1)
-			} else if srvrErr != nil {
-				fmt.Printf("Server error deleting filesystem: %v\n", srvrErr)
-				os.Exit(1)
-			} else if resp == nil {
-				fmt.Println("No response received from server.")
-				os.Exit(1)
-			}
 
 			fmt.Println("Deleted filesystem successfully:", resp.Success)
 		},
 	}
 	fsDeleteCmd.Flags().String("name", "", "Name of the filesystem to delete")
 	fsCmd.AddCommand(fsDeleteCmd)
+
+	fsEjectCmd := &cobra.Command{
+		Use:   "eject",
+		Short: "Eject a registered filesystem",
+		Run: func(cmd *cobra.Command, args []string) {
+			name, _ := cmd.Flags().GetString("name")
+			if len(name) == 0 {
+				fmt.Println("Usage: shimmer fs eject --name <name>")
+				os.Exit(1)
+			}
+			resp := porcelainSendCommandT[mount.FSSuccessResponse]("/fs/eject", mount.FSKnownMountNameRequest{
+				Name: name,
+			})
+			fmt.Println("Ejected filesystem successfully:", resp.Success)
+		},
+	}
+	fsEjectCmd.Flags().String("name", "", "Name of the filesystem to eject")
+	fsCmd.AddCommand(fsEjectCmd)
+
+	fsUnmountCmd := &cobra.Command{
+		Use:   "unmount",
+		Short: "Unmount a registered filesystem",
+		Run: func(cmd *cobra.Command, args []string) {
+			name, _ := cmd.Flags().GetString("name")
+			if len(name) == 0 {
+				fmt.Println("Usage: shimmer fs unmount --name <name> --mount <mount_point>")
+				os.Exit(1)
+			}
+			mountPoint, _ := cmd.Flags().GetString("mount")
+			if len(mountPoint) == 0 {
+				fmt.Println("Usage: shimmer fs unmount --name <name> --mount <mount_point>")
+				os.Exit(1)
+			}
+			resp := porcelainSendCommandT[mount.FSSuccessResponse]("/fs/unmount", mount.FSUnmountKnownMountRequest{
+				Name:       name,
+				MountPoint: mountPoint,
+			})
+			if !resp.Success {
+				fmt.Println("Failed to unmount filesystem")
+				os.Exit(1)
+			}
+			fmt.Printf("Unmounted filesystem '%s' at '%s' successfully.\n", name, mountPoint)
+		},
+	}
+	fsUnmountCmd.Flags().String("name", "", "Name of the filesystem to unmount")
+	fsUnmountCmd.Flags().String("mount", "", "Mount point to unmount the filesystem from")
+	fsCmd.AddCommand(fsUnmountCmd)
 
 	rootCmd.AddCommand(fsCmd)
 
