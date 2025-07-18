@@ -783,83 +783,83 @@ func (skm *SecureKeychainManager) removeFromKeychainSearchList() error {
 	}
 }
 
-// Example usage demonstrating secure keychain management
-func main() {
-	skm, err := InitializeSecureKeychain(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	})))
-	if err != nil {
-		fmt.Printf("❌ Error initializing keychain: %v\n", err)
-		return
-	}
+// // Example usage demonstrating secure keychain management
+// func main() {
+// 	skm, err := InitializeSecureKeychain(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+// 		Level: slog.LevelDebug,
+// 	})))
+// 	if err != nil {
+// 		fmt.Printf("❌ Error initializing keychain: %v\n", err)
+// 		return
+// 	}
 
-	fmt.Printf("✅ Secure keychain initialized successfully\n")
+// 	fmt.Printf("✅ Secure keychain initialized successfully\n")
 
-	fmt.Println("\n--- Token Management Examples ---")
+// 	fmt.Println("\n--- Token Management Examples ---")
 
-	// Store various types of tokens
-	apiToken := "sk-1234567890abcdef1234567890abcdef"
-	if err := skm.StoreToken("api-token", "openai-primary", apiToken); err != nil {
-		fmt.Printf("❌ Failed to store API token: %v\n", err)
-	} else {
-		fmt.Println("✅ API token stored successfully")
-	}
+// 	// Store various types of tokens
+// 	apiToken := "sk-1234567890abcdef1234567890abcdef"
+// 	if err := skm.StoreToken("api-token", "openai-primary", apiToken); err != nil {
+// 		fmt.Printf("❌ Failed to store API token: %v\n", err)
+// 	} else {
+// 		fmt.Println("✅ API token stored successfully")
+// 	}
 
-	encKey, err := skm.GenerateEncryptionKey("database-encryption", 32)
-	if err != nil {
-		fmt.Printf("❌ Failed to generate encryption key: %v\n", err)
-	} else {
-		fmt.Printf("✅ Generated encryption key: %s...\n", encKey[:16])
-	}
+// 	encKey, err := skm.GenerateEncryptionKey("database-encryption", 32)
+// 	if err != nil {
+// 		fmt.Printf("❌ Failed to generate encryption key: %v\n", err)
+// 	} else {
+// 		fmt.Printf("✅ Generated encryption key: %s...\n", encKey[:16])
+// 	}
 
-	dbPassword := "super-secure-db-password-2024"
-	if err := skm.StoreToken("database-password", "postgres-primary", dbPassword); err != nil {
-		fmt.Printf("❌ Failed to store database password: %v\n", err)
-	} else {
-		fmt.Println("✅ Database password stored successfully")
-	}
+// 	dbPassword := "super-secure-db-password-2024"
+// 	if err := skm.StoreToken("database-password", "postgres-primary", dbPassword); err != nil {
+// 		fmt.Printf("❌ Failed to store database password: %v\n", err)
+// 	} else {
+// 		fmt.Println("✅ Database password stored successfully")
+// 	}
 
-	fmt.Println("\n--- Token Retrieval Examples ---")
+// 	fmt.Println("\n--- Token Retrieval Examples ---")
 
-	retrievedToken, err := skm.RetrieveToken("api-token", "openai-primary")
-	if err != nil {
-		fmt.Printf("❌ Failed to retrieve API token: %v\n", err)
-	} else {
-		fmt.Printf("✅ Retrieved API token: %s...\n", retrievedToken[:12])
-	}
+// 	retrievedToken, err := skm.RetrieveToken("api-token", "openai-primary")
+// 	if err != nil {
+// 		fmt.Printf("❌ Failed to retrieve API token: %v\n", err)
+// 	} else {
+// 		fmt.Printf("✅ Retrieved API token: %s...\n", retrievedToken[:12])
+// 	}
 
-	retrievedKey, err := skm.RetrieveToken("encryption-key", "database-encryption")
-	if err != nil {
-		fmt.Printf("❌ Failed to retrieve encryption key: %v\n", err)
-	} else {
-		fmt.Printf("✅ Retrieved encryption key: %s...\n", retrievedKey[:16])
-	}
+// 	retrievedKey, err := skm.RetrieveToken("encryption-key", "database-encryption")
+// 	if err != nil {
+// 		fmt.Printf("❌ Failed to retrieve encryption key: %v\n", err)
+// 	} else {
+// 		fmt.Printf("✅ Retrieved encryption key: %s...\n", retrievedKey[:16])
+// 	}
 
-	fmt.Println("\n--- Stored Tokens Inventory ---")
-	tokens, err := skm.ListTokens()
-	if err != nil {
-		fmt.Printf("❌ Failed to list tokens: %v\n", err)
-	} else {
-		fmt.Printf("📊 Found %d stored tokens:\n", len(tokens))
-		for _, token := range tokens {
-			fmt.Printf("  • %s:%s\n", token.Type, token.Identifier)
-		}
-	}
+// 	fmt.Println("\n--- Stored Tokens Inventory ---")
+// 	tokens, err := skm.ListTokens()
+// 	if err != nil {
+// 		fmt.Printf("❌ Failed to list tokens: %v\n", err)
+// 	} else {
+// 		fmt.Printf("📊 Found %d stored tokens:\n", len(tokens))
+// 		for _, token := range tokens {
+// 			fmt.Printf("  • %s:%s\n", token.Type, token.Identifier)
+// 		}
+// 	}
 
-	fmt.Println("\n--- Security Operations ---")
-	if newPassword, err := skm.RotatePassword(); err == nil {
-		fmt.Printf("🔄 Root password rotated: %s...\n", newPassword[:16])
-	} else {
-		fmt.Printf("❌ Failed to rotate password: %v\n", err)
-	}
+// 	fmt.Println("\n--- Security Operations ---")
+// 	if newPassword, err := skm.RotatePassword(); err == nil {
+// 		fmt.Printf("🔄 Root password rotated: %s...\n", newPassword[:16])
+// 	} else {
+// 		fmt.Printf("❌ Failed to rotate password: %v\n", err)
+// 	}
 
-	fmt.Println("\n--- Cleanup (Commented for Safety) ---")
-	fmt.Println("// To securely remove the keychain:")
-	fmt.Println("// if err := skm.SecureCleanup(); err != nil {")
-	fmt.Printf("//     fmt.Printf(\"❌ Cleanup failed: %v\\n\", err)")
-	fmt.Println("// } else {")
-	fmt.Println("//     fmt.Println(\"✅ Keychain securely removed\")")
-	fmt.Println("// }")
+// 	fmt.Println("\n--- Cleanup (Commented for Safety) ---")
+// 	fmt.Println("// To securely remove the keychain:")
+// 	fmt.Println("// if err := skm.SecureCleanup(); err != nil {")
+// 	fmt.Printf("//     fmt.Printf(\"❌ Cleanup failed: %v\\n\", err)")
+// 	fmt.Println("// } else {")
+// 	fmt.Println("//     fmt.Println(\"✅ Keychain securely removed\")")
+// 	fmt.Println("// }")
 
-	fmt.Println("\n🎉 Secure keychain demo completed successfully!")
-}
+// 	fmt.Println("\n🎉 Secure keychain demo completed successfully!")
+// }

@@ -20,6 +20,8 @@ Follow these instructions:
 
 In one terminal session:
 ```sh
+git clone git@github.com:NovaCove/shimmer.git
+cd shimmer
 make dev
 ./shimmer server
 ```
@@ -48,10 +50,15 @@ tree ./example/demo-new
 tree ./example/demo
 ```
 
+
+
+*** ALL BELOW IS WISHFUL THINKING ***
+
 # Getting Started
 
 ## Installation
 ```
+# Homebrew formula not yet registered
 brew install shimmer
 ```
 

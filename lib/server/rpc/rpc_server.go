@@ -72,7 +72,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	reqRaw, err := readMessage(conn)
 	if err != nil {
-		s.Lgr.Error("failed to read message from connection:", err)
+		s.Lgr.Error("failed to read message from connection", "error", err)
 		return
 	}
 
@@ -110,7 +110,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		s.Lgr.Error("Error encoding response", "command", request.Command, "pid", request.PID, "error", err)
 		return
 	} else if err := writeMessage(conn, respRaw); err != nil {
-		s.Lgr.Error("failed to send response:", err)
+		s.Lgr.Error("failed to send response:", "error", err)
 		return
 	}
 

@@ -225,7 +225,7 @@ func main() {
 				fmt.Println("Shimmer server is not bootstrapped. Please run `shimmer init` first.")
 				os.Exit(1)
 			}
-			lgr.Info("Unlocked shimmer server successfully:\n", result)
+			lgr.Info("Unlocked shimmer server successfully:", slog.Any("result", result))
 		},
 	})
 
@@ -251,7 +251,7 @@ func main() {
 				fmt.Printf("Error unmarshalling response: %v\n", err)
 				os.Exit(1)
 			}
-			lgr.Info("Initialized shimmer server successfully:\n", result)
+			lgr.Info("Initialized shimmer server successfully:\n", slog.Any("result", result))
 		},
 	})
 
@@ -277,7 +277,7 @@ func main() {
 				fmt.Printf("Error unmarshalling response: %v\n", err)
 				os.Exit(1)
 			}
-			lgr.Info("Unlocked shimmer server successfully:\n", result)
+			lgr.Info("Unlocked shimmer server successfully", slog.Any("result", result))
 		},
 	})
 
